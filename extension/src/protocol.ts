@@ -36,6 +36,8 @@ export interface SessionInfo {
   lastActivityTime: number
   runtime?: 'codex' | 'claude'
   workspace?: string
+  workflow?: import('./workflow-identity').WorkflowIdentity
+  workflowMetadataStatus?: import('./workflow-identity').WorkflowMetadataStatus
 }
 
 // ─── Extension → Webview Messages ────────────────────────────────────────────

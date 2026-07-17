@@ -21,6 +21,19 @@ export interface SessionInfo {
   lastActivityTime: number
   runtime?: 'codex' | 'claude'
   workspace?: string
+  workflow?: WorkflowIdentity
+  workflowMetadataStatus?: WorkflowMetadataStatus
+}
+
+export type WorkflowMetadataStatus = 'invalid' | 'expired'
+
+export interface WorkflowIdentity {
+  workflowId: string
+  workflowName: string
+  workflowCreatedAt: string
+  workflowSource: string
+  workflowDescription?: string
+  provenance: 'Explicit orchestration event'
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'watching'

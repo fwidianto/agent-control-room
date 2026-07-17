@@ -7,6 +7,7 @@ import { startCodexRuntime } from './codex-runtime'
 import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } from './hooks-config'
 import { createLogger } from './logger'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
+import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from './workflow-identity'
 
 const log = createLogger('Extension')
 
@@ -14,6 +15,7 @@ type ConfiguredRuntimeMode = AgentRuntimeMode | 'auto'
 
 let eventSource: JsonlEventSource | undefined
 let runtimes: AgentRuntime[] = []
+let workflowReader: WorkflowIdentityReader | undefined
 
 function readConfiguredMode(): ConfiguredRuntimeMode {
   const raw = vscode.workspace.getConfiguration('agentVisualizer').get<string>('runtime', 'auto')
@@ -25,6 +27,11 @@ interface StartRuntimesResult {
   failures: AgentRuntimeMode[]
 }
 
+function workflowMetadata(sessionId: string, runtime: AgentRuntimeMode) {
+  const session = enrichSessionList(workflowReader, [{ id: sessionId, runtime }])[0]
+  return { workflow: session.workflow, workflowMetadataStatus: session.workflowMetadataStatus }
+}
+
 async function startRuntimes(
   mode: ConfiguredRuntimeMode,
   context: vscode.ExtensionContext,
@@ -33,12 +40,12 @@ async function startRuntimes(
   const failures: AgentRuntimeMode[] = []
   if (mode === 'claude' || mode === 'auto') {
     log.info('Starting Claude runtime...')
-    try { runtimes.push(await startClaudeRuntime(context)) }
+    try { runtimes.push(await startClaudeRuntime(context, id => workflowMetadata(id, 'claude'))) }
     catch (err) { log.error('Claude runtime failed to start:', err); failures.push('claude') }
   }
   if (mode === 'codex' || mode === 'auto') {
     log.info('Starting Codex runtime...')
-    try { runtimes.push(startCodexRuntime(context)) }
+    try { runtimes.push(startCodexRuntime(context, id => workflowMetadata(id, 'codex'))) }
     catch (err) { log.error('Codex runtime failed to start:', err); failures.push('codex') }
   }
   return { runtimes, failures }
@@ -47,11 +54,22 @@ async function startRuntimes(
 export async function activate(context: vscode.ExtensionContext) {
   log.info('Extension activated')
 
+  const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  if (workspace) {
+    workflowReader = new WorkflowIdentityReader(resolveWorkflowLogPath(workspace))
+    workflowReader.refresh()
+    context.subscriptions.push({ dispose: () => workflowReader?.dispose() })
+  }
+
   const mode = readConfiguredMode()
   log.info(`Runtime mode: ${mode}`)
   const { runtimes: started, failures } = await startRuntimes(mode, context)
   runtimes = started
   log.info(`Active runtimes: ${runtimes.map(r => r.mode).join(', ') || 'none'}`)
+  workflowReader?.start(() => {
+    const panel = VisualizerPanel.getCurrent()
+    if (panel?.isReady) panel.postMessage({ type: 'session-list', sessions: collectActiveSessions() })
+  })
 
   // Surface startup failures to the user — the log-only path leaves them
   // staring at a "disconnected" visualizer with no explanation.
@@ -143,7 +161,7 @@ function promptHookSetupIfNeededForClaude(context: vscode.ExtensionContext): voi
 
 function collectActiveSessions(): ReturnType<AgentRuntime['watcher']['getActiveSessions']> {
   const all: ReturnType<AgentRuntime['watcher']['getActiveSessions']> = []
-  for (const r of runtimes) all.push(...r.watcher.getActiveSessions())
+  for (const r of runtimes) all.push(...enrichSessionList(workflowReader, r.watcher.getActiveSessions()))
   return all
 }
 

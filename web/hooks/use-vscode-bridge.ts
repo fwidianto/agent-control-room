@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
-import { summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
+import { mergeSessionList, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -187,7 +187,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       }
       if (type === 'list') {
         const sessionList = data as SessionSummary[]
-        setSessions(sessionList)
+        setSessions(prev => mergeSessionList(prev, sessionList))
         // Auto-select: prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
         if (!selectedSessionIdRef.current && sessionList.length > 0) {

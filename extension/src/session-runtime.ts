@@ -14,6 +14,7 @@ import type { AgentEvent, SessionInfo } from './protocol'
 import { VisualizerPanel } from './webview-provider'
 import { SESSION_ID_DISPLAY, STATUS_MESSAGE_DURATION_MS } from './constants'
 import type { TypedDisposable, TypedEvent } from './typed-event-emitter'
+import type { WorkflowIdentity, WorkflowMetadataStatus } from './workflow-identity'
 
 export type AgentRuntimeMode = 'claude' | 'codex'
 
@@ -55,6 +56,7 @@ export interface WatchPanelWiringOptions {
   transformEvent?: (event: AgentEvent) => AgentEvent | null
   runtime: AgentRuntimeMode
   workspace?: string | null
+  workflowMetadata?: (sessionId: string) => { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus }
 }
 
 /**
@@ -98,6 +100,7 @@ export function wireWatcherToPanel(
     if (!panel) return
     if (lifecycle.type === 'started') {
       const known = watcher.getActiveSessions().find(s => s.id === lifecycle.sessionId)
+      const workflowMetadata = options.workflowMetadata?.(lifecycle.sessionId)
       panel.postMessage({
         type: 'session-started',
         session: {
@@ -108,6 +111,7 @@ export function wireWatcherToPanel(
           lastActivityTime: known?.lastActivityTime ?? Date.now(),
           runtime: known?.runtime ?? options.runtime,
           ...((known?.workspace || options.workspace) ? { workspace: known?.workspace || options.workspace! } : {}),
+          ...workflowMetadata,
         },
       })
     } else if (lifecycle.type === 'updated') {

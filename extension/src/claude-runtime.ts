@@ -28,6 +28,7 @@ import {
 import { createLogger } from './logger'
 import { wireWatcherToPanel } from './session-runtime'
 import type { AgentRuntime } from './session-runtime'
+import type { WorkflowIdentity, WorkflowMetadataStatus } from './workflow-identity'
 
 const log = createLogger('ClaudeRuntime')
 
@@ -51,6 +52,7 @@ function filterOrchestratorCompletion(event: AgentEvent): AgentEvent | null {
 
 export async function startClaudeRuntime(
   context: vscode.ExtensionContext,
+  workflowMetadata?: (sessionId: string) => { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus },
 ): Promise<AgentRuntime> {
   // ─── Hook server ───────────────────────────────────────────────────────────
   const hookServer = new HookServer()
@@ -124,6 +126,7 @@ export async function startClaudeRuntime(
     sessionLabelPrefix: 'Claude',
     runtime: 'claude',
     workspace,
+    workflowMetadata,
     transformEvent: filterOrchestratorCompletion,
   })
 

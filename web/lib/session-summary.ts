@@ -1,4 +1,4 @@
-import type { AgentEvent, SessionInfo } from './bridge-types'
+import type { AgentEvent, SessionInfo, WorkflowIdentity } from './bridge-types'
 
 export interface SessionSummary extends SessionInfo {
   model?: string
@@ -6,6 +6,34 @@ export interface SessionSummary extends SessionInfo {
   waiting?: boolean
   tokens?: number
   tokensMax?: number
+}
+
+export interface WorkflowSessionGroup {
+  workflow: WorkflowIdentity
+  sessions: SessionSummary[]
+}
+
+export function groupSessionsByWorkflow(sessions: SessionSummary[]): { workflows: WorkflowSessionGroup[]; ungrouped: SessionSummary[] } {
+  const groups = new Map<string, WorkflowSessionGroup>()
+  const ungrouped: SessionSummary[] = []
+  for (const session of sessions) {
+    if (!session.workflow) {
+      ungrouped.push(session)
+      continue
+    }
+    const existing = groups.get(session.workflow.workflowId)
+    if (existing) existing.sessions.push(session)
+    else groups.set(session.workflow.workflowId, { workflow: session.workflow, sessions: [session] })
+  }
+  return { workflows: [...groups.values()], ungrouped }
+}
+
+export function mergeSessionList(current: SessionSummary[], incoming: SessionInfo[]): SessionSummary[] {
+  const existing = new Map(current.map(session => [session.id, session]))
+  return incoming.map(session => {
+    const previous = existing.get(session.id)
+    return previous ? { ...previous, ...session, workflow: session.workflow, workflowMetadataStatus: session.workflowMetadataStatus } : session
+  })
 }
 
 export function sessionStatus(session: SessionSummary): 'Active' | 'Waiting' | 'Inactive' {

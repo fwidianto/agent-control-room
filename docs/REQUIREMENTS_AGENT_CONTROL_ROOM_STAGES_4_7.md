@@ -20,6 +20,7 @@ The product must distinguish authoritative orchestration data from session-deriv
 - Environment variables in an independently launched agent process are not visible reliably to the visualizer process.
 - Existing Claude subagent events describe runtime-local visualization and are not a cross-runtime workflow contract.
 - Relay history is bounded; browser session history is currently unbounded.
+- The existing protocol keys all session state by bare `sessionId`. A cross-runtime ID collision therefore fails workflow membership closed; Stage 4 does not attempt a protocol-wide composite-key migration.
 
 ## Authority and transport
 
