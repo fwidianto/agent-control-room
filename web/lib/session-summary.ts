@@ -18,6 +18,8 @@ export function openSessionDetails(id: string, select: (id: string) => void, clo
   closeOverview()
 }
 
+export function shortSessionId(id: string): string { return id.slice(-8) }
+
 function text(value: unknown): string { return typeof value === 'string' ? value : '' }
 
 export function interpretActivity(event: AgentEvent): string | undefined {

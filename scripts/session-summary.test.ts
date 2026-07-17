@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { interpretActivity, openSessionDetails, sessionStatus, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '../web/lib/session-summary'
+import { interpretActivity, openSessionDetails, sessionStatus, shortSessionId, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '../web/lib/session-summary'
 
 const base = (id = 'one'): SessionSummary => ({ id, label: id, status: 'active', startTime: 1, lastActivityTime: 1 })
 const event = (type: string, payload: Record<string, unknown> = {}) => ({ time: 1, type, payload })
@@ -56,4 +56,9 @@ test('detail navigation uses the selected session id', () => {
   openSessionDetails('two', id => { selected = id }, () => { overviewOpen = false })
   assert.equal(selected, 'two')
   assert.equal(overviewOpen, false)
+})
+
+test('short session IDs distinguish UUIDs created with the same prefix', () => {
+  assert.equal(shortSessionId('019f6f02-4bd5-79d2-83f7-15eff5c97b24'), 'f5c97b24')
+  assert.equal(shortSessionId('019f6f02-6750-7242-a8ed-781d46c4bb1d'), '46c4bb1d')
 })

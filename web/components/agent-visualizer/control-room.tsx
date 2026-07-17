@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { COLORS } from '@/lib/colors'
 import { formatModelName, formatTokens } from '@/lib/utils'
-import { sessionStatus, type SessionSummary } from '@/lib/session-summary'
+import { sessionStatus, shortSessionId, type SessionSummary } from '@/lib/session-summary'
 
 export function ControlRoom({ sessions, onOpen }: {
   sessions: SessionSummary[]
@@ -32,7 +32,7 @@ export function ControlRoom({ sessions, onOpen }: {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 className="truncate text-sm" style={{ color: COLORS.holoBright }}>{session.label}</h2>
-                  <p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>{session.id.slice(0, 8)}</p>
+                  <p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>{shortSessionId(session.id)}</p>
                 </div>
                 <span
                   className="rounded px-2 py-1 text-[10px]"

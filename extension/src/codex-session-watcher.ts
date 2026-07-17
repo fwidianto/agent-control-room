@@ -284,7 +284,7 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
 
   private attachSession(filePath: string, stat: fs.Stats): void {
     const sessionId = this.sessionIdFor(filePath)
-    const label = `Codex ${sessionId.slice(0, SESSION_ID_DISPLAY)}`
+    const label = `Codex ${sessionId.slice(-SESSION_ID_DISPLAY)}`
 
     // Build the parser once per session so the delegate closures capture the
     // right session reference and re-emission is stateless on this side.
