@@ -24,7 +24,7 @@ export function ControlRoom({ sessions, onOpen }: {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {sessions.map(session => {
           const status = sessionStatus(session)
-          const elapsed = Math.max(0, Math.floor(((status === 'Completed' ? session.lastActivityTime : Date.now()) - session.startTime) / 1000))
+          const elapsed = Math.max(0, Math.floor(((status === 'Inactive' ? session.lastActivityTime : Date.now()) - session.startTime) / 1000))
           const percent = session.tokens !== undefined && session.tokensMax
             ? Math.max(0, Math.min(100, Math.round(session.tokens / session.tokensMax * 100))) : undefined
           return (
@@ -34,7 +34,12 @@ export function ControlRoom({ sessions, onOpen }: {
                   <h2 className="truncate text-sm" style={{ color: COLORS.holoBright }}>{session.label}</h2>
                   <p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>{session.id.slice(0, 8)}</p>
                 </div>
-                <span className="rounded px-2 py-1 text-[10px]" style={{ color: status === 'Completed' ? COLORS.textMuted : COLORS.complete, border: `1px solid ${COLORS.toggleBorder}` }}>{status}</span>
+                <span
+                  className="rounded px-2 py-1 text-[10px]"
+                  title={status === 'Inactive' ? 'No file activity for five minutes; new activity will reactivate this session.' : undefined}
+                  aria-label={status === 'Inactive' ? 'Inactive: no file activity for five minutes; new activity will reactivate this session.' : status}
+                  style={{ color: status === 'Inactive' ? COLORS.textMuted : COLORS.complete, border: `1px solid ${COLORS.toggleBorder}` }}
+                >{status}</span>
               </div>
               <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
                 <dt style={{ color: COLORS.textMuted }}>Runtime</dt><dd style={{ color: COLORS.holoBright }}>{session.runtime ? session.runtime[0].toUpperCase() + session.runtime.slice(1) : 'Unavailable'}</dd>

@@ -8,8 +8,8 @@ export interface SessionSummary extends SessionInfo {
   tokensMax?: number
 }
 
-export function sessionStatus(session: SessionSummary): 'Active' | 'Waiting' | 'Completed' {
-  if (session.status === 'completed') return 'Completed'
+export function sessionStatus(session: SessionSummary): 'Active' | 'Waiting' | 'Inactive' {
+  if (session.status === 'completed') return 'Inactive'
   return session.waiting ? 'Waiting' : 'Active'
 }
 
@@ -46,8 +46,9 @@ export function updateSessionSummary(session: SessionSummary, event: AgentEvent)
       ? true : activity ? false : session.waiting,
     ...(activity ? { activity } : {}),
   }
-  if (event.type === 'model_detected' && typeof event.payload.model === 'string') next.model = event.payload.model
-  if (event.type === 'context_update') {
+  const isMainAgent = event.payload.agent === undefined || event.payload.agent === 'orchestrator'
+  if (isMainAgent && event.type === 'model_detected' && typeof event.payload.model === 'string') next.model = event.payload.model
+  if (isMainAgent && event.type === 'context_update') {
     if (typeof event.payload.tokens === 'number') next.tokens = event.payload.tokens
     if (typeof event.payload.tokensMax === 'number') next.tokensMax = event.payload.tokensMax
   }

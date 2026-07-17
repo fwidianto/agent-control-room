@@ -28,7 +28,7 @@ Agent Flow detects multiple local Codex and Claude sessions but presents them as
 
 - **Active:** lifecycle says active and the latest meaningful event is not a wait signal.
 - **Waiting:** lifecycle says active and the latest meaningful event is `permission_requested` or `agent_idle`.
-- **Completed:** the existing watcher lifecycle emitted `session-ended` after five minutes without file activity.
+- **Inactive:** the existing watcher lifecycle emitted `session-ended` after five minutes without file activity. This does not claim process termination or successful task completion.
 - **Stale:** reserved for a future authoritative lifecycle signal; the MVP does not fabricate it from browser time.
 - Any new event updates last activity; a lifecycle restart returns the session to Active or Waiting according to its latest event.
 
@@ -55,7 +55,7 @@ Activity is a pure mapping from the latest meaningful session event and tool nam
 ## Risks
 
 - Replayed events use session-relative time, so summaries must preserve per-session arrival order rather than compare times across sessions.
-- Lifecycle completion is inactivity-based and may classify long silent thinking as completed; the UI must describe the existing signal, not claim process termination.
+- Lifecycle completion is inactivity-based and may classify long silent thinking as inactive; the UI must describe the existing signal, not claim process termination.
 - Initial lists have more accurate timestamps than restart messages; updates must preserve known start time.
 - Optional context/model/workspace fields may be absent, and event buffers are unbounded; summaries must not add repeated history scans.
 

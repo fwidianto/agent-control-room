@@ -8,7 +8,7 @@ const event = (type: string, payload: Record<string, unknown> = {}) => ({ time: 
 test('classifies lifecycle and wait status truthfully', () => {
   assert.equal(sessionStatus(base()), 'Active')
   assert.equal(sessionStatus({ ...base(), waiting: true }), 'Waiting')
-  assert.equal(sessionStatus({ ...base(), status: 'completed', waiting: true }), 'Completed')
+  assert.equal(sessionStatus({ ...base(), status: 'completed', waiting: true }), 'Inactive')
 })
 
 test('interprets activities deterministically', () => {
@@ -25,6 +25,15 @@ test('updates independent sessions and tolerates missing optional data', () => {
   assert.equal(updated[0].model, undefined)
   assert.equal(updated[1].model, 'gpt-5')
   assert.equal(sessionStatus(updated[0]), 'Active')
+})
+
+test('keeps primary session model and context when subagent events arrive', () => {
+  const primary = updateSessionSummary(base(), event('model_detected', { agent: 'orchestrator', model: 'gpt-5' }))
+  const withContext = updateSessionSummary(primary, event('context_update', { agent: 'orchestrator', tokens: 20, tokensMax: 100 }))
+  const afterSubagent = updateSessionSummary(withContext, event('context_update', { agent: 'worker', tokens: 90, tokensMax: 100 }))
+  assert.equal(afterSubagent.model, 'gpt-5')
+  assert.equal(afterSubagent.tokens, 20)
+  assert.equal(afterSubagent.tokensMax, 100)
 })
 
 test('detail navigation uses the selected session id', () => {
