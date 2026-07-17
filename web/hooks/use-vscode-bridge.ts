@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
+import { summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -18,7 +19,7 @@ interface BridgeHookResult {
   /** Open a file in the VS Code editor */
   bridgeOpenFile: (filePath: string, line?: number) => void
   /** Known sessions from the extension */
-  sessions: SessionInfo[]
+  sessions: SessionSummary[]
   /** Currently selected session ID */
   selectedSessionId: string | null
   /** Select a session to view (does not flush events — call flushSessionEvents after state swap). */
@@ -54,7 +55,7 @@ export function useVSCodeBridge(): BridgeHookResult {
   const [, setEventVersion] = useState(0) // trigger re-render on new events
 
   // Session state
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const selectedSessionIdRef = useRef<string | null>(null)
   const sessionEventsRef = useRef<Map<string, SimulationEvent[]>>(new Map())
@@ -124,6 +125,8 @@ export function useVSCodeBridge(): BridgeHookResult {
         const buf = sessionEventsRef.current.get(event.sessionId) || []
         buf.push(simEvent)
         sessionEventsRef.current.set(event.sessionId, buf)
+        setSessions(prev => prev.map(session => session.id === event.sessionId
+          ? updateSessionSummary(session, event) : session))
       }
 
       // Deliver to pending if session matches (ref is always current).
@@ -183,7 +186,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         return
       }
       if (type === 'list') {
-        const sessionList = data as SessionInfo[]
+        const sessionList = data as SessionSummary[]
         setSessions(sessionList)
         // Auto-select: prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
@@ -207,10 +210,10 @@ export function useVSCodeBridge(): BridgeHookResult {
           if (existing) {
             // Session resumed after inactivity — mark active again
             return prev.map(s => s.id === session.id
-              ? { ...s, status: 'active' as const, lastActivityTime: Date.now() }
+              ? { ...s, ...session, startTime: s.startTime }
               : s)
           }
-          return [...prev, session]
+          return [...prev, summarizeSessionEvents(session, sessionEventsRef.current.get(session.id) || [])]
         })
         // Auto-select newly started session.
         // Set switch-pending flag to prevent the animation frame from processing

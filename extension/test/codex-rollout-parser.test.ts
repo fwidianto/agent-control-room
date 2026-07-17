@@ -186,6 +186,20 @@ describe('CodexRolloutParser', () => {
     assert.equal(state.label, 'List files in the current directory.')
   })
 
+  it('skips recommended plugin metadata when choosing a session label', () => {
+    const labels: string[] = []
+    const parser = new CodexRolloutParser({ emit: () => {}, elapsed: () => 0, setLabel: label => labels.push(label) })
+    const state = createCodexRolloutState()
+    const message = (text: string) => JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+    })
+    parser.processLine(message('<recommended_plugins>\nInjected plugin catalog'), state)
+    parser.processLine(message('Inspect the repository architecture.'), state)
+    assert.deepEqual(labels, ['Inspect the repository architecture.'])
+    assert.equal(state.label, 'Inspect the repository architecture.')
+  })
+
   it('only emits model_detected when the model changes', () => {
     // Feed the same turn_context.model twice and confirm a single emit.
     const events: AgentEvent[] = []

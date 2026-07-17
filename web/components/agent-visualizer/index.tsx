@@ -24,6 +24,8 @@ import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
+import { ControlRoom } from "./control-room"
+import { openSessionDetails } from "@/lib/session-summary"
 
 export function AgentVisualizer() {
   const bridge = useVSCodeBridge()
@@ -69,6 +71,7 @@ export function AgentVisualizer() {
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+  const [showControlRoom, setShowControlRoom] = useState(true)
 
   // Mutually exclusive panel toggling — opening one closes the others
   const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
@@ -256,9 +259,14 @@ export function AgentVisualizer() {
 
   const isEmpty = agents.size === 0 && !bridge.useMockData
 
+  const openSession = useCallback((id: string) => {
+    openSessionDetails(id, bridge.selectSession, () => setShowControlRoom(false))
+  }, [bridge.selectSession])
+
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
     <div className="h-screen w-screen relative overflow-hidden" style={{ background: COLORS.void }}>
+      {showControlRoom && bridge.sessions.length > 0 && <ControlRoom sessions={bridge.sessions} onOpen={openSession} />}
       {/* Empty state when no demo and no live data */}
       {isEmpty && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
@@ -418,6 +426,7 @@ export function AgentVisualizer() {
         onTogglePanel={toggleExclusivePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
+        onOpenControlRoom={() => setShowControlRoom(true)}
       />
     </div>
     </OpenFileProvider>

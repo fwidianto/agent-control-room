@@ -22,6 +22,8 @@ export function startCodexRuntime(context: vscode.ExtensionContext): AgentRuntim
 
   const wiring = wireWatcherToPanel(watcher, {
     sessionLabelPrefix: 'Codex',
+    runtime: 'codex',
+    workspace,
   })
 
   watcher.start()
