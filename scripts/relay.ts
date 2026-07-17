@@ -24,6 +24,7 @@ import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
 import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from '../extension/src/workflow-identity'
 import { selectOrchestrationUpdate } from '../extension/src/orchestration-events'
+import { buildRelayReplayMessages } from './relay-replay'
 
 const MAX_EVENT_BUFFER = 5000
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow')
@@ -534,24 +535,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         log(`[sse] Client disconnected (${sseClients.size} total)`)
       })
 
-      // Send current session list (Claude + Codex)
       const sessionList = collectSessionList()
-      sendSSE(res, selectOrchestrationUpdate(undefined, workflowReader?.getOrchestrationEvents() ?? []))
-      if (sessionList.length > 0) {
-        sendSSE(res, { type: 'session-list', sessions: sessionList })
-      }
-
-      // Replay every session so aggregate summaries are complete on connect.
-      const sorted = [...sessionList].sort((a, b) => {
-        const aActive = a.status === 'active' ? 1 : 0
-        const bActive = b.status === 'active' ? 1 : 0
-        if (aActive !== bActive) return bActive - aActive
-        return b.lastActivityTime - a.lastActivityTime
-      })
-      for (const session of sorted) {
-        const buffered = eventBuffer.get(session.id)
-        if (buffered) sendSSE(res, { type: 'agent-event-batch', events: buffered })
-      }
+      for (const message of buildRelayReplayMessages(workflowReader?.getOrchestrationEvents() ?? [], sessionList, eventBuffer)) sendSSE(res, message)
     },
 
     dispose() {

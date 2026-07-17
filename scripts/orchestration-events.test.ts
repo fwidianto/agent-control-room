@@ -6,7 +6,7 @@ import test from 'node:test'
 import { performance } from 'node:perf_hooks'
 import { ORCHESTRATION_EVENT_TYPES, parseOrchestrationEvent, selectOrchestrationUpdate } from '../extension/src/orchestration-events'
 import { WorkflowIdentityReader } from '../extension/src/workflow-identity'
-import { createOrchestrationState, orchestrationEntityKey, reduceOrchestrationEvent, reduceOrchestrationSnapshot } from '../web/lib/orchestration-state'
+import { createOrchestrationState, MAX_ORCHESTRATION_EVENTS, MAX_ORCHESTRATION_TIMELINE_EVENTS, orchestrationEntityKey, reduceOrchestrationEvent, reduceOrchestrationSnapshot } from '../web/lib/orchestration-state'
 import type { OrchestrationEvent } from '../web/lib/bridge-types'
 
 const base = (type: string, overrides: Record<string, unknown> = {}) => ({
@@ -205,6 +205,35 @@ test('reduces 10,000-event snapshots within a generous performance ceiling', () 
   const state = reduceOrchestrationSnapshot(events)
   const elapsed = performance.now() - started
   console.log(`10k orchestration snapshot: ${elapsed.toFixed(1)}ms`)
-  assert.equal(state.events.length, 10_000)
+  assert.equal(state.acceptedEvents.length, MAX_ORCHESTRATION_EVENTS)
+  assert.equal(state.eventIds.size, MAX_ORCHESTRATION_EVENTS)
+  assert.equal(state.events.length, MAX_ORCHESTRATION_TIMELINE_EVENTS)
+  assert.equal(state.eventsByWorkflow.get('workflow-1')?.length, MAX_ORCHESTRATION_TIMELINE_EVENTS)
   assert.ok(elapsed < 1_000, `10k snapshot took ${elapsed.toFixed(1)}ms`)
+})
+
+test('bounds sustained multi-workflow state, ignores overflow, and reconstructs indexed replay', () => {
+  const events = Array.from({ length: MAX_ORCHESTRATION_EVENTS + 500 }, (_, index) => event('workflow_updated', {
+    eventId: `bounded-${index}`, workflowId: `workflow-${index % 2 + 1}`,
+    timestamp: new Date(Date.UTC(2026, 6, 17, 0, 0, 0, index)).toISOString(), status: 'active',
+  }))
+  const first = reduceOrchestrationSnapshot(events)
+  const reconnect = reduceOrchestrationSnapshot(events)
+  assert.equal(first.acceptedEvents.length, MAX_ORCHESTRATION_EVENTS)
+  assert.equal(first.events.length, MAX_ORCHESTRATION_TIMELINE_EVENTS)
+  assert.equal([...first.eventsByWorkflow.values()].reduce((sum, items) => sum + items.length, 0), MAX_ORCHESTRATION_TIMELINE_EVENTS)
+  assert.deepEqual([...reconnect.eventsByWorkflow].map(([id, items]) => [id, items.map(item => item.event.eventId)]),
+    [...first.eventsByWorkflow].map(([id, items]) => [id, items.map(item => item.event.eventId)]))
+  assert.strictEqual(reduceOrchestrationEvent(first, events.at(-1)!), first)
+})
+
+test('delayed events rebuild current entities and workflow timeline indexes', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('workflow_started', { eventId: 'newer-w1', workflowId: 'workflow-1', timestamp: '2026-07-17T00:00:02.000Z' }),
+    event('workflow_started', { eventId: 'newer-w2', workflowId: 'workflow-2', timestamp: '2026-07-17T00:00:03.000Z' }),
+  ])
+  const delayed = reduceOrchestrationEvent(state, event('assignment_created', { eventId: 'older-w1', workflowId: 'workflow-1', assignmentId: 'assignment', timestamp: '2026-07-17T00:00:01.000Z' }))
+  assert.deepEqual(delayed.eventsByWorkflow.get('workflow-1')?.map(item => item.event.eventId), ['older-w1', 'newer-w1'])
+  assert.deepEqual(delayed.eventsByWorkflow.get('workflow-2')?.map(item => item.event.eventId), ['newer-w2'])
+  assert.equal(delayed.assignments.has(orchestrationEntityKey('workflow-1', 'assignment')), true)
 })

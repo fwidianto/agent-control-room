@@ -266,7 +266,7 @@ export function AgentVisualizer() {
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
     <div className="h-screen w-screen relative overflow-hidden" style={{ background: COLORS.void }}>
-      {showControlRoom && bridge.sessions.length > 0 && <ControlRoom sessions={bridge.sessions} onOpen={openSession} />}
+      {showControlRoom && (bridge.sessions.length > 0 || bridge.orchestrationState.workflows.size > 0) && <ControlRoom sessions={bridge.sessions} orchestrationState={bridge.orchestrationState} sessionActivity={bridge.sessionActivity} onOpen={openSession} />}
       {/* Empty state when no demo and no live data */}
       {isEmpty && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">

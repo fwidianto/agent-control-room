@@ -6,6 +6,8 @@ export interface WorkflowOrchestrationState {
   workflowDescription?: string
   status?: OrchestrationStatus
   source: string
+  startedAt?: string
+  endedAt?: string
 }
 
 export interface AgentOrchestrationState {
@@ -28,6 +30,7 @@ export interface AssignmentOrchestrationState {
   dependencyIds: string[]
   status?: OrchestrationStatus
   reason?: string
+  progressPercent?: number
 }
 
 export interface DelegationState {
@@ -51,15 +54,21 @@ export interface OrchestrationState {
   assignments: Map<string, AssignmentOrchestrationState>
   delegations: Map<string, DelegationState>
   events: OrderedOrchestrationEvent[]
+  eventsByWorkflow: Map<string, OrderedOrchestrationEvent[]>
+  acceptedEvents: OrderedOrchestrationEvent[]
   eventIds: Set<string>
   nextIngestionIndex: number
   latestTimestamp: number
 }
 
+export const MAX_ORCHESTRATION_EVENTS = 10_000
+export const MAX_ORCHESTRATION_TIMELINE_EVENTS = 5_000
+
 export function createOrchestrationState(): OrchestrationState {
   return {
     workflows: new Map(), memberships: new Map(), agents: new Map(), assignments: new Map(),
-    delegations: new Map(), events: [], eventIds: new Set(), nextIngestionIndex: 0, latestTimestamp: -Infinity,
+    delegations: new Map(), events: [], eventsByWorkflow: new Map(), acceptedEvents: [],
+    eventIds: new Set(), nextIngestionIndex: 0, latestTimestamp: -Infinity,
   }
 }
 
@@ -109,10 +118,13 @@ function applyEventMutable(next: OrchestrationState, event: OrchestrationEvent):
     case 'workflow_started':
     case 'workflow_updated':
       next.workflows.set(event.workflowId, { ...workflow, ...(event.workflowName ? { workflowName: event.workflowName } : {}),
-        ...(event.workflowDescription ? { workflowDescription: event.workflowDescription } : {}), status: event.status ?? (event.type === 'workflow_started' ? 'active' : workflow.status) })
+        ...(event.workflowDescription ? { workflowDescription: event.workflowDescription } : {}),
+        ...(event.type === 'workflow_started' ? { startedAt: event.timestamp, endedAt: undefined } : {}),
+        ...(event.status === 'completed' || event.status === 'failed' ? { endedAt: event.timestamp } : {}),
+        status: event.status ?? (event.type === 'workflow_started' ? 'active' : workflow.status) })
       break
     case 'workflow_completed':
-      next.workflows.set(event.workflowId, { ...workflow, status: 'completed' })
+      next.workflows.set(event.workflowId, { ...workflow, status: 'completed', endedAt: event.timestamp })
       break
     case 'agent_registered':
       if (event.agentId) {
@@ -152,6 +164,7 @@ function applyEventMutable(next: OrchestrationState, event: OrchestrationEvent):
           ...(event.agentId ? { agentId: event.agentId } : {}),
           dependencyIds: dependencies ?? assignment.dependencyIds,
           status: status ?? assignment.status,
+          ...(event.metadata?.progressPercent !== undefined ? { progressPercent: event.metadata.progressPercent } : {}),
           ...(event.reason ? { reason: event.reason } : event.type === 'assignment_started' || event.type === 'assignment_completed' ? { reason: undefined } : {}) })
       }
       break
@@ -167,9 +180,21 @@ function applyEventMutable(next: OrchestrationState, event: OrchestrationEvent):
 
 }
 
+function indexEvents(items: OrderedOrchestrationEvent[]): Map<string, OrderedOrchestrationEvent[]> {
+  const indexed = new Map<string, OrderedOrchestrationEvent[]>()
+  for (const item of items) {
+    const workflowEvents = indexed.get(item.event.workflowId)
+    if (workflowEvents) workflowEvents.push(item)
+    else indexed.set(item.event.workflowId, [item])
+  }
+  return indexed
+}
+
 function foldOrderedEvents(items: OrderedOrchestrationEvent[]): OrchestrationState {
   const state = createOrchestrationState()
-  state.events = items
+  state.acceptedEvents = items
+  state.events = items.slice(-MAX_ORCHESTRATION_TIMELINE_EVENTS)
+  state.eventsByWorkflow = indexEvents(state.events)
   for (const item of items) {
     state.eventIds.add(item.event.eventId)
     state.nextIngestionIndex = Math.max(state.nextIngestionIndex, item.ingestionIndex + 1)
@@ -181,15 +206,23 @@ function foldOrderedEvents(items: OrderedOrchestrationEvent[]): OrchestrationSta
 
 export function reduceOrchestrationEvent(state: OrchestrationState, event: OrchestrationEvent): OrchestrationState {
   if (state.eventIds.has(event.eventId)) return state
+  if (state.eventIds.size >= MAX_ORCHESTRATION_EVENTS) return state
   const item = { event, ingestionIndex: state.nextIngestionIndex }
   const timestamp = Date.parse(event.timestamp)
-  if (timestamp < state.latestTimestamp) return foldOrderedEvents([...state.events, item].sort(compareEvents))
+  if (timestamp < state.latestTimestamp) return foldOrderedEvents([...state.acceptedEvents, item].sort(compareEvents))
+
+  const events = [...state.events, item].slice(-MAX_ORCHESTRATION_TIMELINE_EVENTS)
+  const eventsByWorkflow = new Map(state.eventsByWorkflow)
+  const dropped = state.events.length === MAX_ORCHESTRATION_TIMELINE_EVENTS ? state.events[0] : undefined
+  if (dropped) eventsByWorkflow.set(dropped.event.workflowId, (eventsByWorkflow.get(dropped.event.workflowId) ?? []).filter(candidate => candidate !== dropped))
+  eventsByWorkflow.set(event.workflowId, [...(eventsByWorkflow.get(event.workflowId) ?? []), item])
 
   const next: OrchestrationState = {
     ...state,
     workflows: new Map(state.workflows), memberships: new Map(state.memberships), agents: new Map(state.agents),
     assignments: new Map(state.assignments), delegations: new Map(state.delegations),
-    eventIds: new Set(state.eventIds).add(event.eventId), events: [...state.events, item],
+    eventIds: new Set(state.eventIds).add(event.eventId), events, eventsByWorkflow,
+    acceptedEvents: [...state.acceptedEvents, item],
     nextIngestionIndex: state.nextIngestionIndex + 1, latestTimestamp: timestamp,
   }
   applyEventMutable(next, event)
@@ -203,6 +236,7 @@ export function reduceOrchestrationSnapshot(events: readonly OrchestrationEvent[
   let delayed = false
   for (const event of events) {
     if (seen.has(event.eventId)) continue
+    if (items.length >= MAX_ORCHESTRATION_EVENTS) break
     seen.add(event.eventId)
     const timestamp = Date.parse(event.timestamp)
     if (timestamp < latest) delayed = true
