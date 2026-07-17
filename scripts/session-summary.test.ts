@@ -16,6 +16,9 @@ test('interprets activities deterministically', () => {
   assert.equal(interpretActivity(event('tool_call_start', { tool: 'shell_command', args: 'pnpm.cmd test' })), 'Running tests')
   assert.equal(interpretActivity(event('tool_call_start', { tool: 'shell_command', args: 'pnpm run test' })), 'Running tests')
   assert.equal(interpretActivity(event('tool_call_start', { tool: 'WebSearch' })), 'Performing a web search')
+  assert.equal(interpretActivity(event('tool_call_start', { tool: 'exec', args: 'Get-Content web/hooks/use-vscode-bridge.ts' })), 'Inspecting source files')
+  assert.equal(interpretActivity(event('tool_call_start', { tool: 'exec', args: 'tools.apply_patch(...)' })), 'Editing a file')
+  assert.equal(interpretActivity(event('tool_call_start', { tool: 'exec', args: 'tools.web__run({ search_query: [...] })' })), 'Performing a web search')
   assert.equal(interpretActivity(event('permission_requested')), 'Waiting for another result')
 })
 

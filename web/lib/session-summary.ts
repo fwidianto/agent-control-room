@@ -28,11 +28,11 @@ export function interpretActivity(event: AgentEvent): string | undefined {
 
   const tool = text(event.payload.tool).toLowerCase()
   const detail = `${text(event.payload.args)} ${text(event.payload.preview)}`.toLowerCase()
-  if (/websearch|webfetch|web_search|search_query/.test(tool)) return 'Performing a web search'
+  if (/websearch|webfetch|web_search|search_query/.test(tool) || /web__run|web\.run|search_query/.test(detail)) return 'Performing a web search'
   if (/test/.test(tool) || /\b(test|jest|vitest|pytest|cargo test|go test|pnpm(?:\.cmd)?\s+(?:run\s+)?test)\b/.test(detail)) return 'Running tests'
-  if (/^(edit|write|apply_patch)$/.test(tool)) return 'Editing a file'
+  if (/^(edit|write|apply_patch)$/.test(tool) || /apply_patch/.test(detail)) return 'Editing a file'
   if (/grep|glob|search|find/.test(tool) || /\brg\b|select-string/.test(detail)) return 'Searching the codebase'
-  if (/read|view/.test(tool)) return /agents\.md|instructions|skill\.md/.test(detail)
+  if (/read|view/.test(tool) || /get-content/.test(detail)) return /agents\.md|instructions|skill\.md/.test(detail)
     ? 'Reading repository instructions' : 'Inspecting source files'
   return 'Running a tool'
 }
