@@ -52,6 +52,8 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-started'; session: SessionInfo }
   | { type: 'session-ended'; sessionId: string }
   | { type: 'session-updated'; sessionId: string; label: string }
+  | { type: 'orchestration-snapshot'; events: import('./orchestration-events').OrchestrationEvent[] }
+  | { type: 'orchestration-event-batch'; events: import('./orchestration-events').OrchestrationEvent[] }
 
 export interface VisualizerConfig {
   mode: 'live' | 'replay'

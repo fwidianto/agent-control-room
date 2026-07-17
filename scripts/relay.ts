@@ -23,6 +23,7 @@ import {
 import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
 import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from '../extension/src/workflow-identity'
+import { selectOrchestrationUpdate } from '../extension/src/orchestration-events'
 
 const MAX_EVENT_BUFFER = 5000
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow')
@@ -395,6 +396,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   relayWorkspace = workspace
   workflowReader = new WorkflowIdentityReader(resolveWorkflowLogPath(workspace))
   workflowReader.refresh()
+  let orchestrationEventIds = workflowReader.getOrchestrationEvents().map(event => event.eventId)
   verbose = options.verbose ?? false
   // Keep warnings visible without --verbose — actionable hints (e.g. "Codex
   // sessions exist but none match this workspace") must reach the user.
@@ -480,6 +482,10 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
   workflowReader.start(() => {
     broadcast(JSON.stringify({ type: 'session-list', sessions: collectSessionList() }))
+    const events = workflowReader?.getOrchestrationEvents() ?? []
+    const message = selectOrchestrationUpdate(orchestrationEventIds, events)
+    orchestrationEventIds = events.map(event => event.eventId)
+    if (message.events.length > 0 || message.type === 'orchestration-snapshot') broadcast(JSON.stringify(message))
   })
 
   const telemetry = options.telemetry
@@ -530,6 +536,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
       // Send current session list (Claude + Codex)
       const sessionList = collectSessionList()
+      sendSSE(res, selectOrchestrationUpdate(undefined, workflowReader?.getOrchestrationEvents() ?? []))
       if (sessionList.length > 0) {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }

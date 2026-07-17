@@ -33,6 +33,7 @@ Privacy rules:
 - IDs, short display names, roles, assignment titles, status, dependency IDs, and concise reasons are allowed.
 - Prompts, transcript bodies, tool output, secrets, tokens, credentials, and environment dumps are not accepted metadata fields.
 - Unknown fields are ignored and never rendered.
+- Optional `metadata` accepts only bounded `attempt`, `priority`, `progressPercent`, and `retryable` scalars; every other metadata key is rejected.
 - The file is local, not telemetered, and retained until its owner deletes it.
 
 ## Stage 4 — authoritative workflow identity

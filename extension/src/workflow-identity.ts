@@ -1,7 +1,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { ORCHESTRATION_EVENT_VERSION, parseOrchestrationEvent, type OrchestrationEvent, type WorkflowSessionRegisteredRecord } from './orchestration-events'
 
-export const WORKFLOW_EVENT_VERSION = 1
+export const WORKFLOW_EVENT_VERSION = ORCHESTRATION_EVENT_VERSION
 export const MAX_WORKFLOW_LOG_BYTES = 5 * 1024 * 1024
 export const MAX_WORKFLOW_LINE_BYTES = 16 * 1024
 export const MAX_WORKFLOW_RECORDS = 10_000
@@ -27,40 +28,13 @@ export interface WorkflowIdentity {
   provenance: 'Explicit orchestration event'
 }
 
-export interface WorkflowSessionRegisteredRecord {
-  eventId: string
-  eventVersion: 1
-  type: 'workflow_session_registered'
-  timestamp: string
-  source: string
-  workflowId: string
-  workflowName: string
-  workflowCreatedAt: string
-  workflowSource: string
-  workflowDescription?: string
-  sessionId: string
-  runtime: 'codex' | 'claude'
-  expiresAt?: string
-}
-
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
-function validDate(value: unknown): value is string {
-  return nonEmpty(value) && Number.isFinite(Date.parse(value))
-}
-
 export function parseWorkflowSessionRecord(value: unknown, now = Date.now()): WorkflowSessionRegisteredRecord | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  if (record.eventVersion !== WORKFLOW_EVENT_VERSION || record.type !== 'workflow_session_registered') return null
-  if (![record.eventId, record.source, record.workflowId, record.workflowName, record.workflowSource, record.sessionId].every(nonEmpty)) return null
-  if (!validDate(record.timestamp) || !validDate(record.workflowCreatedAt)) return null
-  if (record.runtime !== 'codex' && record.runtime !== 'claude') return null
-  if (record.workflowDescription !== undefined && !nonEmpty(record.workflowDescription)) return null
-  if (record.expiresAt !== undefined && (!validDate(record.expiresAt) || Date.parse(record.expiresAt) <= now)) return null
-  return record as unknown as WorkflowSessionRegisteredRecord
+  const event = parseOrchestrationEvent(value, now)
+  return event?.type === 'workflow_session_registered' ? event : null
 }
 
 export function resolveWorkflowLogPath(workspace: string, override = process.env.AGENT_FLOW_ORCHESTRATION_LOG): string {
@@ -76,6 +50,7 @@ export class WorkflowIdentityReader {
   private readonly conflictedWorkflows = new Set<string>()
   private readonly metadataStatuses = new Map<string, { runtime: 'codex' | 'claude'; status: WorkflowMetadataStatus }>()
   private readonly diagnostics: WorkflowReaderDiagnostic[] = []
+  private readonly orchestrationEvents: OrchestrationEvent[] = []
   private offset = 0
   private recordCount = 0
   private remainder = ''
@@ -99,6 +74,10 @@ export class WorkflowIdentityReader {
   }
 
   getDiagnostics(): readonly WorkflowReaderDiagnostic[] { return [...this.diagnostics] }
+  getOrchestrationEvents(now = Date.now()): readonly OrchestrationEvent[] {
+    return this.orchestrationEvents.filter(event => event.type !== 'workflow_session_registered'
+      || this.get(event.sessionId, event.runtime, now)?.workflowId === event.workflowId)
+  }
 
   apply<T extends { id: string; runtime?: 'codex' | 'claude'; workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus }>(session: T): T & { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus } {
     const { workflow: _workflow, workflowMetadataStatus: _status, ...base } = session
@@ -168,19 +147,24 @@ export class WorkflowIdentityReader {
     let value: unknown
     try { value = JSON.parse(line) } catch { this.addDiagnostic({ code: 'malformed' }); return }
     const attributable = this.attribution(value)
-    const record = parseWorkflowSessionRecord(value, now)
-    if (!record) {
+    const event = parseOrchestrationEvent(value, now)
+    if (!event) {
       const raw = value as Record<string, unknown>
       const code: WorkflowDiagnosticCode = raw.eventVersion !== WORKFLOW_EVENT_VERSION ? 'unsupported'
         : typeof raw.expiresAt === 'string' && Number.isFinite(Date.parse(raw.expiresAt)) && Date.parse(raw.expiresAt) <= now ? 'expired' : 'malformed'
       this.addDiagnostic({ code, ...attributable })
-      if (attributable) this.invalidate(attributable.sessionId, attributable.runtime, code === 'expired' ? 'expired' : 'invalid')
+      if (raw.type === 'workflow_session_registered' && attributable) this.invalidate(attributable.sessionId, attributable.runtime, code === 'expired' ? 'expired' : 'invalid')
       return
     }
-    if (this.eventIds.has(record.eventId)) { this.addDiagnostic({ code: 'duplicate', sessionId: record.sessionId, runtime: record.runtime }); return }
-    if (this.conflictedSessions.has(record.sessionId) || this.conflictedWorkflows.has(record.workflowId)) return
+    if (this.eventIds.has(event.eventId)) {
+      this.addDiagnostic({ code: 'duplicate', ...(event.type === 'workflow_session_registered' ? { sessionId: event.sessionId, runtime: event.runtime } : {}) })
+      return
+    }
     if (this.eventIds.size >= MAX_WORKFLOW_EVENT_IDS) { this.overflow(); return }
-    this.eventIds.add(record.eventId)
+    this.eventIds.add(event.eventId)
+    if (event.type !== 'workflow_session_registered') { this.orchestrationEvents.push(event); return }
+    const record = event
+    if (this.conflictedSessions.has(record.sessionId) || this.conflictedWorkflows.has(record.workflowId)) return
     const identity: WorkflowIdentity = {
       workflowId: record.workflowId,
       workflowName: record.workflowName,
@@ -213,10 +197,11 @@ export class WorkflowIdentityReader {
     }
     this.metadataStatuses.delete(record.sessionId)
     this.identities.set(record.sessionId, candidate)
+    this.orchestrationEvents.push(record)
   }
 
   private reset(): boolean {
-    const changed = this.identities.size > 0
+    const changed = this.identities.size > 0 || this.orchestrationEvents.length > 0
     this.identities.clear()
     this.workflowDefinitions.clear()
     this.eventIds.clear()
@@ -224,6 +209,7 @@ export class WorkflowIdentityReader {
     this.conflictedWorkflows.clear()
     this.metadataStatuses.clear()
     this.diagnostics.length = 0
+    this.orchestrationEvents.length = 0
     this.offset = 0
     this.recordCount = 0
     this.remainder = ''
@@ -233,11 +219,11 @@ export class WorkflowIdentityReader {
   }
 
   private snapshot(now: number): string {
-    return JSON.stringify([...this.identities]
+    return JSON.stringify({ identities: [...this.identities]
       .filter(([, identity]) => !identity.expiresAt || Date.parse(identity.expiresAt) > now)
       .map(([sessionId, identity]) => [sessionId, identity.workflowId]).concat(
         [...this.metadataStatuses].map(([sessionId, metadata]) => [sessionId, metadata.status]),
-      ))
+      ), events: this.getOrchestrationEvents(now).map(event => event.eventId) })
   }
 
   private commitSnapshot(now: number): boolean {
@@ -285,6 +271,7 @@ export class WorkflowIdentityReader {
     this.conflictedSessions.clear()
     this.conflictedWorkflows.clear()
     this.metadataStatuses.clear()
+    this.orchestrationEvents.length = 0
     this.remainder = ''
     this.addDiagnostic({ code: 'overflow' })
   }

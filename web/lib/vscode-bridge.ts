@@ -6,14 +6,15 @@
  * between the React app and the extension host.
  */
 
-export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
-import type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
+export type { AgentEvent, SessionInfo, ConnectionStatus, OrchestrationEvent } from './bridge-types'
+import type { AgentEvent, SessionInfo, ConnectionStatus, OrchestrationEvent } from './bridge-types'
 
 type InitCallback = () => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
 type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | { sessionId: string; label: string }) => void
+type OrchestrationCallback = (type: 'snapshot' | 'batch', events: OrchestrationEvent[]) => void
 
 class VSCodeBridge {
   private _isVSCode = false
@@ -25,6 +26,7 @@ class VSCodeBridge {
   private statusListeners: StatusCallback[] = []
   private configListeners: ConfigCallback[] = []
   private sessionListeners: SessionCallback[] = []
+  private orchestrationListeners: OrchestrationCallback[] = []
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -101,6 +103,14 @@ class VSCodeBridge {
           cb('updated', { sessionId: data.sessionId, label: data.label })
         }
         break
+
+      case 'orchestration-snapshot':
+        for (const cb of this.orchestrationListeners) cb('snapshot', data.events)
+        break
+
+      case 'orchestration-event-batch':
+        for (const cb of this.orchestrationListeners) cb('batch', data.events)
+        break
     }
   }
 
@@ -143,6 +153,10 @@ class VSCodeBridge {
     return this.subscribe(this.sessionListeners, callback)
   }
 
+  onOrchestration(callback: OrchestrationCallback): () => void {
+    return this.subscribe(this.orchestrationListeners, callback)
+  }
+
   // ─── Send commands to extension ──────────────────────────────────────────
 
   openFile(filePath: string, line?: number): void {
@@ -175,6 +189,7 @@ class VSCodeBridge {
     this.statusListeners = []
     this.configListeners = []
     this.sessionListeners = []
+    this.orchestrationListeners = []
   }
 }
 

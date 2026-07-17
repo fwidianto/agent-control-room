@@ -8,6 +8,7 @@ import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } fro
 import { createLogger } from './logger'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from './workflow-identity'
+import { selectOrchestrationUpdate } from './orchestration-events'
 
 const log = createLogger('Extension')
 
@@ -16,6 +17,7 @@ type ConfiguredRuntimeMode = AgentRuntimeMode | 'auto'
 let eventSource: JsonlEventSource | undefined
 let runtimes: AgentRuntime[] = []
 let workflowReader: WorkflowIdentityReader | undefined
+let orchestrationEventIds: string[] = []
 
 function readConfiguredMode(): ConfiguredRuntimeMode {
   const raw = vscode.workspace.getConfiguration('agentVisualizer').get<string>('runtime', 'auto')
@@ -58,6 +60,7 @@ export async function activate(context: vscode.ExtensionContext) {
   if (workspace) {
     workflowReader = new WorkflowIdentityReader(resolveWorkflowLogPath(workspace))
     workflowReader.refresh()
+    orchestrationEventIds = workflowReader.getOrchestrationEvents().map(event => event.eventId)
     context.subscriptions.push({ dispose: () => workflowReader?.dispose() })
   }
 
@@ -68,7 +71,13 @@ export async function activate(context: vscode.ExtensionContext) {
   log.info(`Active runtimes: ${runtimes.map(r => r.mode).join(', ') || 'none'}`)
   workflowReader?.start(() => {
     const panel = VisualizerPanel.getCurrent()
-    if (panel?.isReady) panel.postMessage({ type: 'session-list', sessions: collectActiveSessions() })
+    const events = [...(workflowReader?.getOrchestrationEvents() ?? [])]
+    const message = selectOrchestrationUpdate(orchestrationEventIds, events)
+    orchestrationEventIds = events.map(event => event.eventId)
+    if (panel?.isReady) {
+      panel.postMessage({ type: 'session-list', sessions: collectActiveSessions() })
+      if (message.events.length > 0 || message.type === 'orchestration-snapshot') panel.postMessage(message)
+    }
   })
 
   // Surface startup failures to the user — the log-only path leaves them
@@ -205,6 +214,7 @@ function wirePanel(panel: VisualizerPanel): void {
         // before replay events arrive (otherwise they have no selected
         // session to match and are only buffered, not delivered).
         const sessions = collectActiveSessions()
+        panel.postMessage(selectOrchestrationUpdate(undefined, workflowReader?.getOrchestrationEvents() ?? []))
         if (sessions.length > 0) {
           panel.postMessage({ type: 'session-list', sessions })
           replaySessions(sessions.map(s => s.id))

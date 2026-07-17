@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { mergeSessionList, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
+import { createOrchestrationState, reduceOrchestrationEvent, reduceOrchestrationSnapshot, type OrchestrationState } from '@/lib/orchestration-state'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -34,6 +35,8 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Authoritative state reduced only from accepted orchestration events. */
+  orchestrationState: OrchestrationState
 }
 
 /**
@@ -63,6 +66,7 @@ export function useVSCodeBridge(): BridgeHookResult {
    *  Prevents the animation frame from processing events in the wrong simulation context. */
   const sessionSwitchPendingRef = useRef(false)
   const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
+  const [orchestrationState, setOrchestrationState] = useState(createOrchestrationState)
 
   // Connect to standalone dev relay server via SSE when not in VS Code
   useEffect(() => {
@@ -168,6 +172,11 @@ export function useVSCodeBridge(): BridgeHookResult {
       if (config.disable1MContext !== undefined) { setDisable1MContext(config.disable1MContext) }
     })
 
+    const unsubOrchestration = bridge.onOrchestration((type, events) => {
+      setOrchestrationState(current => type === 'snapshot' ? reduceOrchestrationSnapshot(events)
+        : events.reduce(reduceOrchestrationEvent, current))
+    })
+
     // Session lifecycle tracking
     // Note: these handlers only update session list + selection state.
     // Event flushing is handled by the consumer (index.tsx effect) to avoid
@@ -182,6 +191,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         sessionEventsRef.current.clear()
         setSessionsWithActivity(new Set())
         dismissedSessionsRef.current.clear()
+        setOrchestrationState(createOrchestrationState())
         setEventVersion(v => v + 1)
         return
       }
@@ -240,6 +250,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       unsubEvent()
       unsubStatus()
       unsubConfig()
+      unsubOrchestration()
       unsubSession()
     }
   }, [])
@@ -318,5 +329,6 @@ export function useVSCodeBridge(): BridgeHookResult {
     getSessionEventCount,
     sessionsWithActivity,
     removeSession,
+    orchestrationState,
   }
 }
