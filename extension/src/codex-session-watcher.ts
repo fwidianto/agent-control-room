@@ -170,6 +170,8 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
       status: s.sessionCompleted ? 'completed' : 'active',
       startTime: s.sessionStartTime,
       lastActivityTime: s.lastActivityTime,
+      runtime: 'codex',
+      ...(s.rolloutState.cwd || this.workspacePath ? { workspace: s.rolloutState.cwd || this.workspacePath! } : {}),
     }))
   }
 

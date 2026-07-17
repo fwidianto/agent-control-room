@@ -100,11 +100,19 @@ function broadcastEvent(event: AgentEvent) {
   broadcast(JSON.stringify({ type: 'agent-event', event }))
 }
 
-function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string) {
+let relayWorkspace: string | null = null
+
+function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string, known?: SessionInfo) {
   if (type === 'started') {
+    const claude = sessions.get(sessionId)
     broadcast(JSON.stringify({
       type: 'session-started',
-      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now() } as SessionInfo,
+      session: known ?? {
+        id: sessionId, label, status: 'active', runtime: 'claude',
+        startTime: claude?.sessionStartTime ?? Date.now(),
+        lastActivityTime: claude?.lastActivityTime ?? Date.now(),
+        ...(relayWorkspace ? { workspace: relayWorkspace } : {}),
+      } as SessionInfo,
     }))
   } else if (type === 'ended') {
     broadcast(JSON.stringify({ type: 'session-ended', sessionId }))
@@ -377,6 +385,7 @@ function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
 
 export async function createRelay(options: RelayOptions): Promise<Relay> {
   const { workspace } = options
+  relayWorkspace = workspace
   verbose = options.verbose ?? false
   // Keep warnings visible without --verbose — actionable hints (e.g. "Codex
   // sessions exist but none match this workspace") must reach the user.
@@ -434,7 +443,12 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     codexWatcher = new CodexSessionWatcher(workspace)
     codexWatcher.onEvent((event) => broadcastEvent(event))
     codexWatcher.onSessionLifecycle((lifecycle) => {
-      broadcastSessionLifecycle(lifecycle.type, lifecycle.sessionId, lifecycle.label)
+      broadcastSessionLifecycle(
+        lifecycle.type,
+        lifecycle.sessionId,
+        lifecycle.label,
+        codexWatcher?.getActiveSessions().find(session => session.id === lifecycle.sessionId),
+      )
     })
     codexWatcher.start()
   }
@@ -493,6 +507,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
           id: session.sessionId, label: session.label,
           status: session.sessionCompleted ? 'completed' : 'active',
           startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
+          runtime: 'claude', workspace,
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
@@ -500,18 +515,16 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
 
-      // Replay buffered events for the most recent active session
+      // Replay every session so aggregate summaries are complete on connect.
       const sorted = [...sessionList].sort((a, b) => {
         const aActive = a.status === 'active' ? 1 : 0
         const bActive = b.status === 'active' ? 1 : 0
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
-        if (buffered) {
-          sendSSE(res, { type: 'agent-event-batch', events: buffered })
-        }
+      for (const session of sorted) {
+        const buffered = eventBuffer.get(session.id)
+        if (buffered) sendSSE(res, { type: 'agent-event-batch', events: buffered })
       }
     },
 

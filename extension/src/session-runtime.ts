@@ -53,6 +53,8 @@ export interface WatchPanelWiringOptions {
   sessionLabelPrefix: string
   /** Optional event transform — return null to suppress an event. */
   transformEvent?: (event: AgentEvent) => AgentEvent | null
+  runtime: AgentRuntimeMode
+  workspace?: string | null
 }
 
 /**
@@ -95,14 +97,17 @@ export function wireWatcherToPanel(
     const panel = VisualizerPanel.getCurrent()
     if (!panel) return
     if (lifecycle.type === 'started') {
+      const known = watcher.getActiveSessions().find(s => s.id === lifecycle.sessionId)
       panel.postMessage({
         type: 'session-started',
         session: {
           id: lifecycle.sessionId,
           label: lifecycle.label,
-          status: 'active',
-          startTime: Date.now(),
-          lastActivityTime: Date.now(),
+          status: known?.status ?? 'active',
+          startTime: known?.startTime ?? Date.now(),
+          lastActivityTime: known?.lastActivityTime ?? Date.now(),
+          runtime: known?.runtime ?? options.runtime,
+          ...((known?.workspace || options.workspace) ? { workspace: known?.workspace || options.workspace! } : {}),
         },
       })
     } else if (lifecycle.type === 'updated') {

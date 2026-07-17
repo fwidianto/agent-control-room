@@ -98,6 +98,7 @@ export interface TopBarProps {
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
+  onOpenControlRoom: () => void
 }
 
 export const TopBar = memo(function TopBar({
@@ -106,7 +107,7 @@ export const TopBar = memo(function TopBar({
   isVSCode, connectionStatus,
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
-  onTogglePanel, onToggleTimeline, onToggleMute,
+  onTogglePanel, onToggleTimeline, onToggleMute, onOpenControlRoom,
 }: TopBarProps) {
   return (
     <div className="absolute top-3 left-3 right-3 flex items-center gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
@@ -128,6 +129,7 @@ export const TopBar = memo(function TopBar({
 
       {/* Right-side info/controls */}
       <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+        <button type="button" onClick={onOpenControlRoom} className="px-1.5 py-0.5 rounded" style={{ border: `1px solid ${COLORS.toggleBorder}` }}>Overview</button>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
         <span>{agentCount} agents</span>
         <span>
