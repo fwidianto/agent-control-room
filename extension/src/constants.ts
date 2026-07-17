@@ -210,6 +210,7 @@ export const SYSTEM_CONTENT_PREFIXES = [
   '<ide_',
   '<system-reminder',
   '<available-deferred-tools',
+  '<recommended_plugins>',
   '<command-name',
   '<system_instruction',
   '<task-notification',

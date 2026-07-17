@@ -102,7 +102,7 @@ export function wireWatcherToPanel(
         type: 'session-started',
         session: {
           id: lifecycle.sessionId,
-          label: lifecycle.label,
+          label: known?.label ?? lifecycle.label,
           status: known?.status ?? 'active',
           startTime: known?.startTime ?? Date.now(),
           lastActivityTime: known?.lastActivityTime ?? Date.now(),

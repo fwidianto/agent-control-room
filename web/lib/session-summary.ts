@@ -54,3 +54,7 @@ export function updateSessionSummary(session: SessionSummary, event: AgentEvent)
   }
   return next
 }
+
+export function summarizeSessionEvents(session: SessionSummary, events: AgentEvent[]): SessionSummary {
+  return events.reduce(updateSessionSummary, session)
+}

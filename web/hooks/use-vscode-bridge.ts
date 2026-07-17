@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
-import { updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
+import { summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -213,7 +213,7 @@ export function useVSCodeBridge(): BridgeHookResult {
               ? { ...s, ...session, startTime: s.startTime }
               : s)
           }
-          return [...prev, session]
+          return [...prev, summarizeSessionEvents(session, sessionEventsRef.current.get(session.id) || [])]
         })
         // Auto-select newly started session.
         // Set switch-pending flag to prevent the animation frame from processing

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { interpretActivity, openSessionDetails, sessionStatus, updateSessionSummary, type SessionSummary } from '../web/lib/session-summary'
+import { interpretActivity, openSessionDetails, sessionStatus, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '../web/lib/session-summary'
 
 const base = (id = 'one'): SessionSummary => ({ id, label: id, status: 'active', startTime: 1, lastActivityTime: 1 })
 const event = (type: string, payload: Record<string, unknown> = {}) => ({ time: 1, type, payload })
@@ -34,6 +34,17 @@ test('keeps primary session model and context when subagent events arrive', () =
   assert.equal(afterSubagent.model, 'gpt-5')
   assert.equal(afterSubagent.tokens, 20)
   assert.equal(afterSubagent.tokensMax, 100)
+})
+
+test('builds a new live-session summary from events buffered before session start', () => {
+  const summary = summarizeSessionEvents(base(), [
+    event('model_detected', { agent: 'orchestrator', model: 'gpt-5' }),
+    event('context_update', { agent: 'orchestrator', tokens: 25, tokensMax: 100 }),
+    event('tool_call_start', { agent: 'orchestrator', tool: 'Read', args: 'src/index.ts' }),
+  ])
+  assert.equal(summary.model, 'gpt-5')
+  assert.equal(summary.tokens, 25)
+  assert.equal(summary.activity, 'Inspecting source files')
 })
 
 test('detail navigation uses the selected session id', () => {
