@@ -3,7 +3,8 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { enrichSessionList, MAX_WORKFLOW_DIAGNOSTICS, MAX_WORKFLOW_LINE_BYTES, parseWorkflowSessionRecord, resolveWorkflowLogPath, WorkflowIdentityReader } from '../extension/src/workflow-identity'
+import { enrichSessionList, MAX_WORKFLOW_DIAGNOSTICS, MAX_WORKFLOW_LINE_BYTES, MAX_WORKFLOW_RECORDS, parseWorkflowSessionRecord, resolveWorkflowLogPath, WorkflowIdentityReader } from '../extension/src/workflow-identity'
+import { parseOrchestrationEvent } from '../extension/src/orchestration-events'
 import { groupSessionsByWorkflow, mergeSessionList, type SessionSummary } from '../web/lib/session-summary'
 
 const now = Date.parse('2026-07-17T00:00:00.000Z')
@@ -159,5 +160,48 @@ test('serialized session-list protocol preserves summaries across registration, 
     rmSync(file)
     reconnect.refresh(protocolNow + 62_000)
     assert.equal(roundTrip(reconnect).workflowMetadataStatus, undefined)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('manual and native membership conflicts suppress both phantom workflows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-flow-native-conflict-'))
+  const file = join(dir, 'orchestration.jsonl')
+  try {
+    writeFileSync(file, `${JSON.stringify(record())}\n`)
+    const reader = new WorkflowIdentityReader(file)
+    reader.refresh(now)
+    const supplemental = [
+      record({ eventId: 'native-member', workflowId: 'native-workflow', workflowName: 'Native', workflowSource: 'native-codex-rollout', source: 'native-codex-rollout' }),
+      { eventId: 'native-start', eventVersion: 1, type: 'workflow_started', timestamp: '2026-07-16T23:00:00.000Z', source: 'native-codex-rollout', workflowId: 'native-workflow', workflowName: 'Native' },
+      { eventId: 'native-agent', eventVersion: 1, type: 'agent_registered', timestamp: '2026-07-16T23:00:00.000Z', source: 'native-codex-rollout', workflowId: 'native-workflow', agentId: 'session-1', agentName: 'Native agent' },
+    ].map(value => parseOrchestrationEvent(value, now)).filter(value => value !== null)
+    reader.setSupplementalEvents(supplemental, now)
+    assert.equal(reader.get('session-1', 'codex', now), undefined)
+    assert.equal(reader.getMetadataStatus('session-1', 'codex'), 'invalid')
+    assert.equal(reader.getOrchestrationEvents(now).length, 0)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('one combined bound reserves capacity for native and manual events', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-flow-combined-bound-'))
+  const file = join(dir, 'orchestration.jsonl')
+  try {
+    const manual = Array.from({ length: MAX_WORKFLOW_RECORDS }, (_, index) => ({
+      eventId: `manual-${index}`, eventVersion: 1, type: 'workflow_started',
+      timestamp: '2026-07-16T23:00:00.000Z', source: 'launcher', workflowId: `manual-${index}`, workflowName: 'Manual',
+    }))
+    writeFileSync(file, manual.map(value => JSON.stringify(value)).join('\n') + '\n')
+    const reader = new WorkflowIdentityReader(file)
+    reader.refresh(now)
+    const native = parseOrchestrationEvent({
+      eventId: 'native-reserved', eventVersion: 1, type: 'workflow_started',
+      timestamp: '2026-07-16T23:00:00.000Z', source: 'native-codex-rollout', workflowId: 'native', workflowName: 'Native',
+    }, now)
+    assert.ok(native)
+    reader.setSupplementalEvents([native], now)
+    const events = reader.getOrchestrationEvents(now)
+    assert.equal(events.length, MAX_WORKFLOW_RECORDS)
+    assert.ok(events.some(event => event.eventId === 'native-reserved'))
+    assert.ok(events.some(event => event.eventId === 'manual-0'))
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
