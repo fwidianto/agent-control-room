@@ -39,7 +39,7 @@ export interface WorkflowIdentity {
 export type OrchestrationStatus = 'active' | 'waiting' | 'blocked' | 'returned' | 'completed' | 'failed'
 export type OrchestrationEventType =
   | 'workflow_session_registered' | 'workflow_started' | 'workflow_updated' | 'workflow_completed'
-  | 'agent_registered' | 'assignment_created' | 'assignment_started' | 'assignment_updated'
+  | 'agent_registered' | 'agent_status_updated' | 'assignment_created' | 'assignment_started' | 'assignment_updated'
   | 'assignment_blocked' | 'assignment_completed' | 'assignment_failed' | 'delegation_created'
   | 'dependency_created' | 'agent_waiting' | 'agent_resumed' | 'agent_returned' | 'orchestration_message'
 

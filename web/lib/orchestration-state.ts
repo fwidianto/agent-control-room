@@ -134,6 +134,13 @@ function applyEventMutable(next: OrchestrationState, event: OrchestrationEvent):
         status: next.agents.get(key)?.status })
       }
       break
+    case 'agent_status_updated':
+      if (event.agentId && event.status) {
+        const key = orchestrationEntityKey(event.workflowId, event.agentId)
+        const agent = next.agents.get(key) ?? { agentId: event.agentId, workflowId: event.workflowId }
+        next.agents.set(key, { ...agent, status: event.status, reason: event.reason })
+      }
+      break
     case 'agent_waiting':
     case 'agent_resumed':
     case 'agent_returned':

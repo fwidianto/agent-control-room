@@ -26,6 +26,7 @@ Optional `metadata` accepts only `attempt` (non-negative integer), `priority` (s
 | `workflow_updated` | at least one of `workflowName`, `workflowDescription`, `status` |
 | `workflow_completed` | none |
 | `agent_registered` | `agentId`, `agentName`; optional `agentRole`, `sessionId` |
+| `agent_status_updated` | `agentId`, `status`; optional bounded `reason` |
 | `assignment_created` | `assignmentId`, `assignmentTitle`; optional description, owner, dependencies, status |
 | `assignment_started` | `assignmentId`, `agentId` |
 | `assignment_updated` | `assignmentId` plus a changed title, description, owner, dependencies, or status |
@@ -35,7 +36,7 @@ Optional `metadata` accepts only `attempt` (non-negative integer), `priority` (s
 | `agent_waiting`, `agent_resumed`, `agent_returned` | `agentId`; optional assignment ID/reason |
 | `orchestration_message` | `reason` and at least one agent/session/assignment ID |
 
-Workflow and assignment status fields accept `active`, `waiting`, `blocked`, `completed`, and `failed`. `returned` is agent-only and comes from `agent_returned`; workflow or assignment records using it are rejected. Self/cyclic delegations and cyclic dependencies are excluded from hierarchy/state. Missing parents stay unresolved. Duplicate event IDs are idempotent. Presentation ordering is timestamp, ingestion index, then event ID; delayed older events do not regress newer entity state.
+Workflow and assignment status fields accept `active`, `waiting`, `blocked`, `completed`, and `failed`. `agent_status_updated` also accepts `returned`; its latest valid event controls only that agent's status and optional reason. Agent completion does not complete its workflow. `returned` remains invalid for workflow and assignment records. Self/cyclic delegations and cyclic dependencies are excluded from hierarchy/state. Missing parents stay unresolved. Duplicate event IDs are idempotent. Presentation ordering is timestamp, ingestion index, then event ID; delayed older events do not regress newer entity state.
 
 ## Safe PowerShell example
 

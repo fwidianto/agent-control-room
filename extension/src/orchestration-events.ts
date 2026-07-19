@@ -3,7 +3,7 @@ export const ORCHESTRATION_EVENT_VERSION = 1
 export const ORCHESTRATION_EVENT_TYPES = [
   'workflow_session_registered',
   'workflow_started', 'workflow_updated', 'workflow_completed',
-  'agent_registered',
+  'agent_registered', 'agent_status_updated',
   'assignment_created', 'assignment_started', 'assignment_updated', 'assignment_blocked', 'assignment_completed', 'assignment_failed',
   'delegation_created', 'dependency_created',
   'agent_waiting', 'agent_resumed', 'agent_returned',
@@ -57,6 +57,13 @@ export interface AgentOrchestrationEvent extends OrchestrationEventBase {
   reason?: string
 }
 
+export interface AgentStatusUpdatedEvent extends OrchestrationEventBase {
+  type: 'agent_status_updated'
+  agentId: string
+  status: OrchestrationStatus
+  reason?: string
+}
+
 export interface AssignmentOrchestrationEvent extends OrchestrationEventBase {
   type: 'assignment_created' | 'assignment_started' | 'assignment_updated' | 'assignment_blocked' | 'assignment_completed' | 'assignment_failed'
   assignmentId: string
@@ -91,7 +98,7 @@ export interface OrchestrationMessageEvent extends OrchestrationEventBase {
   assignmentId?: string
 }
 
-export type OrchestrationEvent = WorkflowSessionRegisteredRecord | WorkflowLifecycleEvent | AgentOrchestrationEvent
+export type OrchestrationEvent = WorkflowSessionRegisteredRecord | WorkflowLifecycleEvent | AgentOrchestrationEvent | AgentStatusUpdatedEvent
   | AssignmentOrchestrationEvent | DelegationCreatedEvent | DependencyCreatedEvent | OrchestrationMessageEvent
 
 const TYPE_SET = new Set<string>(ORCHESTRATION_EVENT_TYPES)
@@ -196,6 +203,9 @@ export function parseOrchestrationEvent(value: unknown, now = Date.now()): Orche
       if (!agentId || !agentName) return null
       return { ...common, type: common.type, agentId, agentName, ...(optionalText('agentRole') ? { agentRole: optionalText('agentRole') } : {}), ...(sessionId ? { sessionId } : {}) }
     }
+    case 'agent_status_updated':
+      if (!agentId || !status) return null
+      return { ...common, type: common.type, agentId, status, ...(reason ? { reason } : {}) }
     case 'agent_waiting':
     case 'agent_resumed':
     case 'agent_returned':

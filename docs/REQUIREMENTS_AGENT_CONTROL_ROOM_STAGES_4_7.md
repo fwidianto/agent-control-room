@@ -19,7 +19,7 @@ The product must distinguish authoritative orchestration data from session-deriv
 - Codex rollouts do not provide trustworthy parent-child subagent relationships.
 - Environment variables in an independently launched agent process are not visible reliably to the visualizer process.
 - Existing Claude subagent events describe runtime-local visualization and are not a cross-runtime workflow contract.
-- Relay history is bounded; browser session history is currently unbounded.
+- Relay history is bounded; detailed-session browser buffers remain unbounded until reset/reconnect, panel/page close, or reload.
 - The existing protocol keys all session state by bare `sessionId`. A cross-runtime ID collision therefore fails workflow membership closed; Stage 4 does not attempt a protocol-wide composite-key migration.
 
 ## Authority and transport
@@ -53,7 +53,7 @@ Gate: multi-workflow, duplicate-name, malformed, replay, legacy, no-inference, a
 Extend version 1 with:
 
 - `workflow_started`, `workflow_updated`, `workflow_completed`;
-- `agent_registered`;
+- `agent_registered`, `agent_status_updated`;
 - `assignment_created`, `assignment_started`, `assignment_updated`, `assignment_blocked`, `assignment_completed`, `assignment_failed`;
 - `delegation_created`, `dependency_created`;
 - `agent_waiting`, `agent_resumed`, `agent_returned`;
@@ -71,10 +71,10 @@ Statuses:
 
 - `Active`: explicit assignment/workflow activity or an active session, without a stronger explicit state.
 - `Waiting`: explicit wait event or existing session wait signal.
-- `Blocked`: explicit blocked event with optional safe reason.
+- `Blocked`: explicit workflow, assignment, or agent status event with optional safe reason.
 - `Inactive`: session watcher inactivity only.
-- `Completed`: explicit assignment/workflow completion only.
-- `Failed`: explicit failure only.
+- `Completed`: explicit workflow, assignment, or agent completion only; entity scopes remain separate.
+- `Failed`: explicit workflow, assignment, or agent failure only.
 - `Unknown`: insufficient or contradictory authoritative data.
 
 Incremental state is updated once per accepted event. Timeline retention is capped consistently with relay replay; the UI does not mount detailed visualizers per card. Keyboard focus, semantic lists/trees, text status labels, narrow layouts, long labels, and reduced motion are required; critical explanations cannot be hover-only.

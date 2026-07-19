@@ -52,6 +52,19 @@ test('keeps multiple workflows isolated and handles missing context data', () =>
   assert.equal(one.elapsedSeconds, 120)
 })
 
+test('counts every authoritative agent status without treating agent completion as workflow completion', () => {
+  const statuses = ['active', 'waiting', 'blocked', 'returned', 'completed', 'failed'] as const
+  const state = reduceOrchestrationSnapshot(statuses.map((status, index) => event('agent_status_updated', {
+    eventId: `agent-status-${status}`, agentId: `agent-${index}`, status,
+  })))
+  const metrics = workflowMetrics('workflow-1', state, [], Date.parse('2026-07-17T00:02:00.000Z'))
+  assert.deepEqual(metrics.counts.agents, { Active: 1, Waiting: 1, Blocked: 1, Returned: 1, Completed: 1, Failed: 1, Unknown: 0 })
+  assert.equal(metrics.status, 'Failed')
+
+  const completedOnly = reduceOrchestrationSnapshot([event('agent_status_updated', { agentId: 'agent', status: 'completed' })])
+  assert.equal(workflowMetrics('workflow-1', completedOnly, [], Date.now()).status, 'Unknown')
+})
+
 test('stops workflow elapsed time only on explicit workflow completion and keeps explicit progress', () => {
   const state = reduceOrchestrationSnapshot([
     event('workflow_started', { timestamp: '2026-07-17T00:00:00.000Z' }),

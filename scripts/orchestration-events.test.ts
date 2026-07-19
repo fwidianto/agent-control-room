@@ -20,6 +20,7 @@ const validByType: Record<string, Record<string, unknown>> = {
   workflow_updated: { status: 'active' },
   workflow_completed: {},
   agent_registered: { agentId: 'agent-1', agentName: 'Builder' },
+  agent_status_updated: { agentId: 'agent-1', status: 'blocked' },
   assignment_created: { assignmentId: 'assignment-1', assignmentTitle: 'Implement parser' },
   assignment_started: { assignmentId: 'assignment-1', agentId: 'agent-1' },
   assignment_updated: { assignmentId: 'assignment-1', agentId: 'agent-2' },
@@ -62,6 +63,22 @@ test('rejects unsupported, malformed, cyclic-self, and private raw content', () 
   assert.deepEqual(parseOrchestrationEvent(base('agent_registered', { ...validByType.agent_registered,
     metadata: { attempt: 2, priority: 'high', progressPercent: 50, retryable: true } }))?.metadata,
   { attempt: 2, priority: 'high', progressPercent: 50, retryable: true })
+})
+
+test('parses every explicit agent status and rejects malformed status updates', () => {
+  for (const status of ['active', 'waiting', 'blocked', 'returned', 'completed', 'failed']) {
+    const parsed = parseOrchestrationEvent(base('agent_status_updated', { agentId: 'agent-1', status, reason: 'Explicit reason' }))
+    assert.deepEqual(parsed && { type: parsed.type, agentId: parsed.agentId, status: parsed.status, reason: parsed.reason },
+      { type: 'agent_status_updated', agentId: 'agent-1', status, reason: 'Explicit reason' })
+  }
+  for (const malformed of [
+    { status: 'blocked' },
+    { agentId: 'agent-1' },
+    { agentId: 'agent-1', status: 'inactive' },
+    { agentId: 'agent-1', status: 'Blocked' },
+    { agentId: 'agent-1', status: 'blocked', reason: '' },
+    { agentId: 'agent-1', status: 'blocked', reason: 'x'.repeat(2_049) },
+  ]) assert.equal(parseOrchestrationEvent(base('agent_status_updated', malformed)), null)
 })
 
 test('reader replays and tails one bounded idempotent orchestration stream', () => {
@@ -118,6 +135,23 @@ test('incremental state is idempotent, ordered, explicit, and supports reassignm
   assert.equal(state.assignments.get(assignmentKey)?.reason, undefined)
 })
 
+test('reduces explicit agent statuses without changing legacy lifecycle behavior', () => {
+  const key = orchestrationEntityKey('workflow-1', 'agent-1')
+  for (const status of ['active', 'waiting', 'blocked', 'returned', 'completed', 'failed'] as const) {
+    const state = reduceOrchestrationSnapshot([event('agent_status_updated', { agentId: 'agent-1', status, reason: 'Explicit reason' })])
+    assert.deepEqual({ status: state.agents.get(key)?.status, reason: state.agents.get(key)?.reason }, { status, reason: 'Explicit reason' })
+  }
+  for (const [type, status] of [['agent_waiting', 'waiting'], ['agent_resumed', 'active'], ['agent_returned', 'returned']] as const) {
+    const state = reduceOrchestrationSnapshot([event(type, { agentId: 'agent-1' })])
+    assert.equal(state.agents.get(key)?.status, status)
+  }
+  const cleared = reduceOrchestrationSnapshot([
+    event('agent_status_updated', { agentId: 'agent-1', status: 'blocked', reason: 'Dependency' }),
+    event('agent_status_updated', { agentId: 'agent-1', status: 'active' }),
+  ])
+  assert.deepEqual({ status: cleared.agents.get(key)?.status, reason: cleared.agents.get(key)?.reason }, { status: 'active', reason: undefined })
+})
+
 test('missing parents remain unresolved while delegation and dependency cycles are rejected', () => {
   const state = reduceOrchestrationSnapshot([
     event('delegation_created', { eventId: 'missing-parent', agentId: 'child', parentAgentId: 'missing' }),
@@ -161,18 +195,18 @@ test('delayed older events cannot regress workflow, agent, assignment, or reassi
   const newer = '2026-07-17T00:00:02.000Z'
   const state = reduceOrchestrationSnapshot([
     event('workflow_completed', { eventId: 'workflow-new', timestamp: newer }),
-    event('agent_returned', { eventId: 'agent-new', timestamp: newer, agentId: 'agent' }),
+    event('agent_status_updated', { eventId: 'agent-new', timestamp: newer, agentId: 'agent', status: 'failed', reason: 'Latest' }),
     event('assignment_completed', { eventId: 'assignment-new', timestamp: newer, assignmentId: 'assignment' }),
     event('assignment_updated', { eventId: 'owner-new', timestamp: newer, assignmentId: 'owned', agentId: 'agent-2' }),
   ])
   const delayed = [
     event('workflow_started', { eventId: 'workflow-old', timestamp: older, workflowName: 'Release' }),
-    event('agent_waiting', { eventId: 'agent-old', timestamp: older, agentId: 'agent' }),
+    event('agent_status_updated', { eventId: 'agent-old', timestamp: older, agentId: 'agent', status: 'blocked', reason: 'Older' }),
     event('assignment_started', { eventId: 'assignment-old', timestamp: older, assignmentId: 'assignment', agentId: 'agent' }),
     event('assignment_updated', { eventId: 'owner-old', timestamp: older, assignmentId: 'owned', agentId: 'agent-1' }),
   ].reduce(reduceOrchestrationEvent, state)
   assert.equal(delayed.workflows.get('workflow-1')?.status, 'completed')
-  assert.equal(delayed.agents.get(orchestrationEntityKey('workflow-1', 'agent'))?.status, 'returned')
+  assert.deepEqual({ status: delayed.agents.get(orchestrationEntityKey('workflow-1', 'agent'))?.status, reason: delayed.agents.get(orchestrationEntityKey('workflow-1', 'agent'))?.reason }, { status: 'failed', reason: 'Latest' })
   assert.equal(delayed.assignments.get(orchestrationEntityKey('workflow-1', 'assignment'))?.status, 'completed')
   assert.equal(delayed.assignments.get(orchestrationEntityKey('workflow-1', 'owned'))?.agentId, 'agent-2')
 })

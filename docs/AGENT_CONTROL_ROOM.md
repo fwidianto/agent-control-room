@@ -10,11 +10,11 @@ Workflow identity, agent names, assignments, delegation, and dependencies are au
 
 - **Active**: current session activity or explicit active workflow, assignment, or agent state.
 - **Waiting**: an explicit wait event or existing session wait signal.
-- **Blocked**: an explicit blocked event, optionally with a safe reason.
+- **Blocked**: an explicit workflow, assignment, or agent status event, optionally with a safe reason.
 - **Inactive**: the watcher saw no file activity for five minutes; this is not task success or process termination.
 - **Returned**: an explicit agent result-return event.
-- **Completed**: explicit assignment or workflow completion only.
-- **Failed**: explicit workflow or assignment failure only.
+- **Completed**: explicit workflow, assignment, or agent completion only; an agent completing does not complete its workflow.
+- **Failed**: explicit workflow, assignment, or agent failure only.
 - **Unknown**: authoritative data is absent or insufficient.
 
 Session inactivity, assignment completion, workflow completion, and process termination are separate signals.
@@ -76,4 +76,4 @@ Use `pnpm.cmd run dev:demo` for mock data. macOS/Linux users can use the same sc
 
 Keep orchestration changes optional, local-first, versioned, deterministic, and backwards compatible. Add parser and replay tests for contract changes. Never infer authority or add transcript content to events. Run the validation matrix in the requirements document and keep generated data out of commits.
 
-Known limits: version 1 uses an append-only local file, bare session IDs can collide across runtimes, history is bounded and owner-cleaned, no cloud transport exists, visual QA is manual, and `vsce` must be installed separately to create a VSIX. Generic watcher/relay improvements may be proposed upstream; the optional sidecar contract and control-room UI should remain isolated until upstream adopts them.
+Known limits: version 1 uses an append-only local file, bare session IDs can collide across runtimes, and the detailed visualizer's per-session browser buffers remain unbounded until reset/reconnect, panel/page close, or reload. Relay and orchestration histories are bounded, but a long-lived browser can still grow with session activity. No cloud transport exists, visual QA is manual, and `vsce` must be installed separately to create a VSIX. Generic watcher/relay improvements may be proposed upstream; the optional sidecar contract and control-room UI should remain isolated until upstream adopts them.
