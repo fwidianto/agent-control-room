@@ -40,6 +40,18 @@ export interface AgentTreeNode {
   children: AgentTreeNode[]
 }
 
+export interface SessionOrchestrationContext {
+  workflowName: string
+  agentName: string
+  agentRole?: string
+  sessionId: string
+  parent?: { name: string; sessionId?: string }
+  children: Array<{ name: string; sessionId?: string }>
+  assignment: string
+  status: string
+  breadcrumb: Array<{ name: string; sessionId?: string }>
+}
+
 export interface WorkflowStateCounts {
   agents: Record<'Active' | 'Waiting' | 'Blocked' | 'Returned' | 'Completed' | 'Failed' | 'Unknown', number>
   assignments: Record<'Active' | 'Waiting' | 'Blocked' | 'Completed' | 'Failed' | 'Unknown', number>
@@ -83,6 +95,45 @@ export function partitionSessionActivity(activities: readonly SessionActivityEve
 
 function explicitAgentForSession(state: OrchestrationState, workflowId: string, sessionId: string): AgentOrchestrationState | undefined {
   for (const agent of state.agents.values()) if (agent.workflowId === workflowId && agent.sessionId === sessionId) return agent
+}
+
+function relationshipName(agent: AgentOrchestrationState | undefined, isChild: boolean, hasExplicitChildren = false): string {
+  return agent?.agentName ?? agent?.agentId ?? (isChild ? 'Child Agent' : hasExplicitChildren ? 'Root Agent' : 'Agent identity unavailable')
+}
+
+export function sessionOrchestrationContext(sessionId: string, state: OrchestrationState): SessionOrchestrationContext {
+  const membership = state.memberships.get(sessionId)
+  if (!membership) return { workflowName: 'Unavailable', agentName: 'Agent identity unavailable', sessionId, children: [], assignment: 'Unavailable', status: 'Unknown', breadcrumb: [] }
+  const workflowId = membership.workflowId
+  const workflowName = state.workflows.get(workflowId)?.workflowName ?? workflowId
+  const agent = explicitAgentForSession(state, workflowId, sessionId)
+  if (!agent) return { workflowName, agentName: 'Agent identity unavailable', sessionId, children: [], assignment: 'Unavailable', status: 'Unknown', breadcrumb: [] }
+  const delegation = state.delegations.get(orchestrationEntityKey(workflowId, agent.agentId))
+  const parentAgent = delegation ? state.agents.get(orchestrationEntityKey(workflowId, delegation.parentAgentId)) : undefined
+  const children = [...state.delegations.values()].filter(item => item.workflowId === workflowId && item.parentAgentId === agent.agentId).map(item => {
+    const child = state.agents.get(orchestrationEntityKey(workflowId, item.agentId))
+    return { name: relationshipName(child, true), sessionId: child?.sessionId ?? item.sessionId }
+  })
+  const explicitAssignment = agent.assignmentId ? state.assignments.get(orchestrationEntityKey(workflowId, agent.assignmentId)) : undefined
+  const ownedAssignments = [...state.assignments.values()].filter(item => item.workflowId === workflowId && item.agentId === agent.agentId)
+  const assignment = explicitAssignment ?? (ownedAssignments.length === 1 ? ownedAssignments[0] : undefined)
+  const path: AgentOrchestrationState[] = []
+  const seen = new Set<string>()
+  let current: AgentOrchestrationState | undefined = agent
+  while (current && !seen.has(current.agentId)) {
+    path.unshift(current)
+    seen.add(current.agentId)
+    const parentId: string | undefined = state.delegations.get(orchestrationEntityKey(workflowId, current.agentId))?.parentAgentId
+    current = parentId ? state.agents.get(orchestrationEntityKey(workflowId, parentId)) : undefined
+  }
+  return {
+    workflowName, agentName: relationshipName(agent, Boolean(delegation), children.length > 0), agentRole: agent.agentRole, sessionId,
+    parent: delegation ? { name: parentAgent ? relationshipName(parentAgent, false) : delegation.parentAgentId, sessionId: parentAgent?.sessionId ?? delegation.parentSessionId } : undefined,
+    children, assignment: assignment?.assignmentTitle ?? assignment?.assignmentId ?? 'Unavailable',
+    status: agent.status ? title(agent.status) : 'Unknown',
+    breadcrumb: path.map((item, index) => ({ name: relationshipName(item, index > 0,
+      [...state.delegations.values()].some(edge => edge.workflowId === workflowId && edge.parentAgentId === item.agentId)), sessionId: item.sessionId })),
+  }
 }
 
 export function buildWorkflowTimeline(workflowId: string, state: OrchestrationState, activities: readonly SessionActivityEvent[]): WorkflowTimelineItem[] {

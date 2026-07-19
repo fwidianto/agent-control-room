@@ -112,7 +112,9 @@ function applyEventMutable(next: OrchestrationState, event: OrchestrationEvent):
     case 'workflow_session_registered':
       if (event.sessionId && event.runtime) {
         next.memberships.set(event.sessionId, { workflowId: event.workflowId, runtime: event.runtime })
-        next.workflows.set(event.workflowId, { ...workflow, workflowName: event.workflowName, workflowDescription: event.workflowDescription })
+        next.workflows.set(event.workflowId, { ...workflow,
+          ...(event.workflowName ? { workflowName: event.workflowName } : {}),
+          ...(event.workflowDescription ? { workflowDescription: event.workflowDescription } : {}) })
       }
       break
     case 'workflow_started':

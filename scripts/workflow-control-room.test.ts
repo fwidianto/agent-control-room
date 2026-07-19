@@ -8,6 +8,7 @@ import type { SessionSummary } from '../web/lib/session-summary'
 import {
   appendSessionActivity, buildAgentForest, buildWorkflowTimeline, CONTROL_ROOM_RENDER_LIMIT,
   CONTROL_ROOM_TIMELINE_LIMIT, filterWorkflowTimeline, partitionSessionActivity, workflowMetrics, workflowStatus,
+  sessionOrchestrationContext,
 } from '../web/lib/workflow-control-room'
 
 let serial = 0
@@ -98,6 +99,31 @@ test('uses hierarchy only for complete explicit registered delegations', () => {
   assert.equal(buildAgentForest('workflow-1', unresolved).hierarchical, false)
 })
 
+test('builds selected-session identity and breadcrumb only from explicit orchestration relationships', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('workflow_started', { workflowName: 'Native run' }),
+    event('workflow_session_registered', { sessionId: 'root-session', runtime: 'codex' }),
+    event('workflow_session_registered', { sessionId: 'luna-session', runtime: 'codex' }),
+    event('agent_registered', { agentId: 'root', sessionId: 'root-session' }),
+    event('agent_registered', { agentId: 'luna', agentName: 'Luna', agentRole: 'Worker', sessionId: 'luna-session' }),
+    event('delegation_created', { agentId: 'luna', parentAgentId: 'root', sessionId: 'luna-session', parentSessionId: 'root-session' }),
+    event('assignment_created', { assignmentId: 'implement', assignmentTitle: 'Implement native bridge', agentId: 'luna' }),
+    event('agent_returned', { agentId: 'luna' }),
+  ])
+  const context = sessionOrchestrationContext('luna-session', state)
+  assert.equal(context.workflowName, 'Native run')
+  assert.equal(context.agentName, 'Luna')
+  assert.equal(context.agentRole, 'Worker')
+  assert.deepEqual(context.parent, { name: 'root', sessionId: 'root-session' })
+  assert.equal(context.assignment, 'Implement native bridge')
+  assert.equal(context.status, 'Returned')
+  assert.deepEqual(context.breadcrumb.map(item => item.name), ['root', 'Luna'])
+  const unknown = sessionOrchestrationContext('legacy-session', reduceOrchestrationSnapshot([]))
+  assert.equal(unknown.agentName, 'Agent identity unavailable')
+  assert.equal(unknown.parent, undefined)
+  assert.deepEqual(unknown.children, [])
+})
+
 test('combines delayed orchestration and session activity deterministically and filters every owner field', () => {
   const state = reduceOrchestrationSnapshot([
     event('workflow_started', { eventId: 'later', timestamp: '2026-07-17T00:00:03.000Z', workflowName: 'Release' }),
@@ -155,4 +181,9 @@ test('control room source preserves semantic labels, keyboard focus, reduced DOM
   assert.doesNotMatch(source, /AgentVisualizer/)
   const indexSource = readFileSync(new URL('../web/components/agent-visualizer/index.tsx', import.meta.url), 'utf8')
   assert.ok(indexSource.includes('bridge.sessions.length > 0 || bridge.orchestrationState.workflows.size > 0'))
+  assert.ok(indexSource.includes('<SessionOrchestrationHeader'))
+  const headerSource = readFileSync(new URL('../web/components/agent-visualizer/session-orchestration-header.tsx', import.meta.url), 'utf8')
+  for (const marker of ['Selected session orchestration context', 'Agent relationship path', 'Workflow Overview', 'Parent agent', 'Child agents', 'Assignment', 'Session ID']) assert.ok(headerSource.includes(marker), `missing ${marker}`)
+  assert.doesNotMatch(headerSource, /session\.label|prompt/i)
+  assert.ok(indexSource.includes('bridge.sessions.some(session => session.id === id)'))
 })

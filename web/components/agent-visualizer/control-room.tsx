@@ -55,20 +55,21 @@ function SessionGrid({ sessions, onOpen, now }: { sessions: SessionSummary[]; on
   return <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{sessions.map(session => <SessionCard key={session.id} session={session} onOpen={onOpen} now={now} />)}</div>
 }
 
-function AgentLabel({ agent }: { agent: AgentOrchestrationState }) {
-  return <><span style={{ color: COLORS.holoBright }}>{agent.agentName ?? agent.agentId}</span>{agent.agentRole ? <span style={{ color: COLORS.textMuted }}> · {agent.agentRole}</span> : null}<span style={{ color: COLORS.textMuted }}> · {agent.status ?? 'unknown'}</span></>
+function AgentLabel({ agent, onOpen }: { agent: AgentOrchestrationState; onOpen: (id: string) => void }) {
+  const name = agent.agentName ?? agent.agentId
+  return <>{agent.sessionId ? <button type="button" className={`underline underline-offset-2 ${focus}`} onClick={() => onOpen(agent.sessionId!)} style={{ color: COLORS.holoBright }}>{name}</button> : <span style={{ color: COLORS.holoBright }}>{name}</span>}{agent.agentRole ? <span style={{ color: COLORS.textMuted }}> · {agent.agentRole}</span> : null}<span style={{ color: COLORS.textMuted }}> · {agent.status ?? 'unknown'}</span></>
 }
 
-function AgentBranch({ node }: { node: AgentTreeNode }) {
-  return <li className="mt-2"><AgentLabel agent={node.agent} />{node.children.length ? <ul className="ml-5 border-l pl-3" style={{ borderColor: COLORS.toggleBorder }}>{node.children.map(child => <AgentBranch key={child.agent.agentId} node={child} />)}</ul> : null}</li>
+function AgentBranch({ node, onOpen }: { node: AgentTreeNode; onOpen: (id: string) => void }) {
+  return <li className="mt-2"><AgentLabel agent={node.agent} onOpen={onOpen} />{node.children.length ? <ul className="ml-5 border-l pl-3" style={{ borderColor: COLORS.toggleBorder }}>{node.children.map(child => <AgentBranch key={child.agent.agentId} node={child} onOpen={onOpen} />)}</ul> : null}</li>
 }
 
-function AgentView({ workflowId, state }: { workflowId: string; state: OrchestrationState }) {
+function AgentView({ workflowId, state, onOpen }: { workflowId: string; state: OrchestrationState; onOpen: (id: string) => void }) {
   const forest = useMemo(() => buildAgentForest(workflowId, state), [workflowId, state])
   if (!forest.roots.length) return <p className="text-xs" style={{ color: COLORS.textMuted }}>No agents explicitly registered.</p>
   return forest.hierarchical
-    ? <ul aria-label="Authoritative agent relationships" className="text-xs">{forest.roots.map(node => <AgentBranch key={node.agent.agentId} node={node} />)}</ul>
-    : <ul aria-label="Registered agents without explicit relationships" className="space-y-2 text-xs">{forest.roots.map(node => <li key={node.agent.agentId}><AgentLabel agent={node.agent} /></li>)}</ul>
+    ? <ul aria-label="Authoritative agent relationships" className="text-xs">{forest.roots.map(node => <AgentBranch key={node.agent.agentId} node={node} onOpen={onOpen} />)}</ul>
+    : <ul aria-label="Registered agents without explicit relationships" className="space-y-2 text-xs">{forest.roots.map(node => <li key={node.agent.agentId}><AgentLabel agent={node.agent} onOpen={onOpen} /></li>)}</ul>
 }
 
 function Filter({ label, value, values, onChange }: { label: string; value?: string; values: string[]; onChange: (value?: string) => void }) {
@@ -114,7 +115,7 @@ function WorkflowSection({ workflowId, workflowName, sessions, state, activity, 
     <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
       {([['Elapsed', elapsed(metrics.elapsedSeconds)], ['Sessions', metrics.sessionCount], ['Agents', metrics.agentCount], ['Context', metrics.tokens === undefined ? 'Unavailable' : formatTokens(metrics.tokens)], ['Assignments', `${metrics.completedAssignments}/${metrics.assignmentCount} completed`], ['Agent states', formatCounts(metrics.counts.agents)], ['Assignment states', formatCounts(metrics.counts.assignments)], ['Session states', formatCounts(metrics.counts.sessions)]] as const).map(([label, value]) => <div key={label} className="min-w-0 rounded p-2" style={{ background: COLORS.holoBg05 }}><dt style={{ color: COLORS.textMuted }}>{label}</dt><dd className="mt-1 break-words" style={{ color: COLORS.holoBright }}>{value}</dd></div>)}
     </dl>
-    <div className="mt-5 grid gap-5 lg:grid-cols-2"><section aria-labelledby={`agents-${index}`}><h3 id={`agents-${index}`} className="mb-2 text-xs" style={{ color: COLORS.holoBright }}>Agents</h3><AgentView workflowId={workflowId} state={state} /></section><section aria-labelledby={`assignments-${index}`}><h3 id={`assignments-${index}`} className="mb-2 text-xs" style={{ color: COLORS.holoBright }}>Assignments</h3>{assignments.length ? <ul className="space-y-2 text-xs">{assignments.map(item => <li key={item.assignmentId}><span style={{ color: COLORS.holoBright }}>{item.assignmentTitle ?? item.assignmentId}</span><span style={{ color: COLORS.textMuted }}> · {item.status ?? 'unknown'}{item.progressPercent !== undefined ? ` · ${item.progressPercent}%` : ''}{item.agentId ? ` · Agent ${item.agentId}` : ''}{item.dependencyIds.length ? ` · Depends on ${item.dependencyIds.join(', ')}` : ''}</span>{item.reason ? <p style={{ color: COLORS.textMuted }}>Reason: {item.reason}</p> : null}</li>)}</ul> : <p className="text-xs" style={{ color: COLORS.textMuted }}>No assignments explicitly recorded.</p>}</section></div>
+    <div className="mt-5 grid gap-5 lg:grid-cols-2"><section aria-labelledby={`agents-${index}`}><h3 id={`agents-${index}`} className="mb-2 text-xs" style={{ color: COLORS.holoBright }}>Agents</h3><AgentView workflowId={workflowId} state={state} onOpen={onOpen} /></section><section aria-labelledby={`assignments-${index}`}><h3 id={`assignments-${index}`} className="mb-2 text-xs" style={{ color: COLORS.holoBright }}>Assignments</h3>{assignments.length ? <ul className="space-y-2 text-xs">{assignments.map(item => <li key={item.assignmentId}><span style={{ color: COLORS.holoBright }}>{item.assignmentTitle ?? item.assignmentId}</span><span style={{ color: COLORS.textMuted }}> · {item.status ?? 'unknown'}{item.progressPercent !== undefined ? ` · ${item.progressPercent}%` : ''}{item.agentId ? ` · Agent ${item.agentId}` : ''}{item.dependencyIds.length ? ` · Depends on ${item.dependencyIds.join(', ')}` : ''}</span>{item.reason ? <p style={{ color: COLORS.textMuted }}>Reason: {item.reason}</p> : null}</li>)}</ul> : <p className="text-xs" style={{ color: COLORS.textMuted }}>No assignments explicitly recorded.</p>}</section></div>
     <section className="mt-5" aria-labelledby={`timeline-${index}`}><h3 id={`timeline-${index}`} className="mb-2 text-xs" style={{ color: COLORS.holoBright }}>Combined timeline</h3><WorkflowTimeline items={timeline} onOpen={onOpen} /></section>
     <section className="mt-6" aria-labelledby={`sessions-${index}`}><h3 id={`sessions-${index}`} className="mb-3 text-xs" style={{ color: COLORS.holoBright }}>Sessions</h3>{sessions.length ? <SessionGrid sessions={sessions} onOpen={onOpen} now={now} /> : <p className="text-xs" style={{ color: COLORS.textMuted }}>No sessions explicitly registered.</p>}</section>
   </section>
