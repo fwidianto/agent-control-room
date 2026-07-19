@@ -13,10 +13,15 @@ import { createLogger } from './logger'
 import { wireWatcherToPanel } from './session-runtime'
 import type { AgentRuntime } from './session-runtime'
 import type { WorkflowIdentity, WorkflowMetadataStatus } from './workflow-identity'
+import type { OrchestrationEvent } from './orchestration-events'
 
 const log = createLogger('CodexRuntime')
 
-export function startCodexRuntime(context: vscode.ExtensionContext, workflowMetadata?: (sessionId: string) => { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus }): AgentRuntime {
+export function startCodexRuntime(
+  context: vscode.ExtensionContext,
+  workflowMetadata?: (sessionId: string) => { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus },
+  onOrchestrationEvents?: (events: readonly OrchestrationEvent[]) => void,
+): AgentRuntime {
   const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null
   const watcher = new CodexSessionWatcher(workspace)
   context.subscriptions.push(watcher)
@@ -28,6 +33,7 @@ export function startCodexRuntime(context: vscode.ExtensionContext, workflowMeta
     workflowMetadata,
   })
 
+  if (onOrchestrationEvents) watcher.onOrchestrationChange(onOrchestrationEvents)
   watcher.start()
 
   const homeLabel = process.env.CODEX_HOME

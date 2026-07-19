@@ -9,6 +9,7 @@ import { createLogger } from './logger'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from './workflow-identity'
 import { selectOrchestrationUpdate } from './orchestration-events'
+import type { OrchestrationEvent } from './orchestration-events'
 
 const log = createLogger('Extension')
 
@@ -18,6 +19,21 @@ let eventSource: JsonlEventSource | undefined
 let runtimes: AgentRuntime[] = []
 let workflowReader: WorkflowIdentityReader | undefined
 let orchestrationEventIds: string[] = []
+
+function publishOrchestrationUpdate(): void {
+  const panel = VisualizerPanel.getCurrent()
+  const events = [...(workflowReader?.getOrchestrationEvents() ?? [])]
+  const message = selectOrchestrationUpdate(orchestrationEventIds, events)
+  orchestrationEventIds = events.map(event => event.eventId)
+  if (panel?.isReady) {
+    panel.postMessage({ type: 'session-list', sessions: collectActiveSessions() })
+    if (message.events.length > 0 || message.type === 'orchestration-snapshot') panel.postMessage(message)
+  }
+}
+
+function acceptNativeOrchestration(events: readonly OrchestrationEvent[]): void {
+  if (workflowReader?.setSupplementalEvents(events)) publishOrchestrationUpdate()
+}
 
 function readConfiguredMode(): ConfiguredRuntimeMode {
   const raw = vscode.workspace.getConfiguration('agentVisualizer').get<string>('runtime', 'auto')
@@ -47,7 +63,7 @@ async function startRuntimes(
   }
   if (mode === 'codex' || mode === 'auto') {
     log.info('Starting Codex runtime...')
-    try { runtimes.push(startCodexRuntime(context, id => workflowMetadata(id, 'codex'))) }
+    try { runtimes.push(startCodexRuntime(context, id => workflowMetadata(id, 'codex'), acceptNativeOrchestration)) }
     catch (err) { log.error('Codex runtime failed to start:', err); failures.push('codex') }
   }
   return { runtimes, failures }
@@ -69,16 +85,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const { runtimes: started, failures } = await startRuntimes(mode, context)
   runtimes = started
   log.info(`Active runtimes: ${runtimes.map(r => r.mode).join(', ') || 'none'}`)
-  workflowReader?.start(() => {
-    const panel = VisualizerPanel.getCurrent()
-    const events = [...(workflowReader?.getOrchestrationEvents() ?? [])]
-    const message = selectOrchestrationUpdate(orchestrationEventIds, events)
-    orchestrationEventIds = events.map(event => event.eventId)
-    if (panel?.isReady) {
-      panel.postMessage({ type: 'session-list', sessions: collectActiveSessions() })
-      if (message.events.length > 0 || message.type === 'orchestration-snapshot') panel.postMessage(message)
-    }
-  })
+  workflowReader?.start(publishOrchestrationUpdate)
 
   // Surface startup failures to the user — the log-only path leaves them
   // staring at a "disconnected" visualizer with no explanation.

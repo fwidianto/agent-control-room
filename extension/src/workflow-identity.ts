@@ -28,6 +28,8 @@ export interface WorkflowIdentity {
   provenance: 'Explicit orchestration event'
 }
 
+type StoredWorkflowIdentity = WorkflowIdentity & { expiresAt?: string; runtime: 'codex' | 'claude' }
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -43,7 +45,7 @@ export function resolveWorkflowLogPath(workspace: string, override = process.env
 }
 
 export class WorkflowIdentityReader {
-  private readonly identities = new Map<string, WorkflowIdentity & { expiresAt?: string; runtime: 'codex' | 'claude' }>()
+  private readonly identities = new Map<string, StoredWorkflowIdentity>()
   private readonly workflowDefinitions = new Map<string, WorkflowIdentity>()
   private readonly eventIds = new Set<string>()
   private readonly conflictedSessions = new Set<string>()
@@ -51,6 +53,9 @@ export class WorkflowIdentityReader {
   private readonly metadataStatuses = new Map<string, { runtime: 'codex' | 'claude'; status: WorkflowMetadataStatus }>()
   private readonly diagnostics: WorkflowReaderDiagnostic[] = []
   private readonly orchestrationEvents: OrchestrationEvent[] = []
+  private supplementalEvents: OrchestrationEvent[] = []
+  private supplementalIdentities = new Map<string, StoredWorkflowIdentity>()
+  private supplementalConflicts = new Set<string>()
   private offset = 0
   private recordCount = 0
   private remainder = ''
@@ -63,20 +68,74 @@ export class WorkflowIdentityReader {
 
   get(sessionId: string, runtime?: 'codex' | 'claude', now = Date.now()): WorkflowIdentity | undefined {
     const identity = this.identities.get(sessionId)
-    if (!identity || (runtime && identity.runtime !== runtime) || (identity.expiresAt && Date.parse(identity.expiresAt) <= now)) return undefined
-    const { expiresAt: _expiresAt, runtime: _runtime, ...publicIdentity } = identity
+    const supplemental = this.supplementalIdentities.get(sessionId)
+    if (this.supplementalConflicts.has(sessionId)
+      || identity && supplemental && JSON.stringify({ ...identity, expiresAt: undefined }) !== JSON.stringify(supplemental)) return undefined
+    const selected = identity ?? supplemental
+    if (!selected || (runtime && selected.runtime !== runtime)
+      || (selected.expiresAt && Date.parse(selected.expiresAt) <= now)) return undefined
+    const { expiresAt: _expiresAt, runtime: _runtime, ...publicIdentity } = selected
     return publicIdentity
   }
 
   getMetadataStatus(sessionId: string, runtime?: 'codex' | 'claude'): WorkflowMetadataStatus | undefined {
+    if (this.supplementalConflicts.has(sessionId)
+      || this.identities.has(sessionId) && this.supplementalIdentities.has(sessionId) && !this.get(sessionId, runtime)) return 'invalid'
     const metadata = this.metadataStatuses.get(sessionId)
     return metadata && (!runtime || metadata.runtime === runtime) ? metadata.status : undefined
   }
 
   getDiagnostics(): readonly WorkflowReaderDiagnostic[] { return [...this.diagnostics] }
   getOrchestrationEvents(now = Date.now()): readonly OrchestrationEvent[] {
-    return this.orchestrationEvents.filter(event => event.type !== 'workflow_session_registered'
-      || this.get(event.sessionId, event.runtime, now)?.workflowId === event.workflowId)
+    const combined = [...this.orchestrationEvents, ...this.supplementalEvents]
+    const invalidWorkflows = new Set(combined
+      .filter((event): event is WorkflowSessionRegisteredRecord => event.type === 'workflow_session_registered'
+        && this.get(event.sessionId, event.runtime, now)?.workflowId !== event.workflowId)
+      .map(event => event.workflowId))
+    const seen = new Set<string>()
+    const valid = combined.filter(event => {
+      if (invalidWorkflows.has(event.workflowId) || seen.has(event.eventId)) return false
+      seen.add(event.eventId)
+      return true
+    })
+    if (valid.length <= MAX_WORKFLOW_RECORDS) return valid
+    const supplementalIds = new Set(this.supplementalEvents.map(event => event.eventId))
+    const manual = valid.filter(event => !supplementalIds.has(event.eventId))
+    const supplemental = valid.filter(event => supplementalIds.has(event.eventId))
+    const supplementalReserve = Math.min(supplemental.length, Math.floor(MAX_WORKFLOW_RECORDS / 2))
+    const manualCount = Math.min(manual.length, MAX_WORKFLOW_RECORDS - supplementalReserve)
+    const supplementalCount = Math.min(supplemental.length, MAX_WORKFLOW_RECORDS - manualCount)
+    return [...manual.slice(0, manualCount), ...supplemental.slice(0, supplementalCount)]
+  }
+
+  setSupplementalEvents(events: readonly OrchestrationEvent[], now = Date.now()): boolean {
+    const previous = JSON.stringify({ events: this.supplementalEvents.map(item => item.eventId), identities: [...this.supplementalIdentities] })
+    const accepted: OrchestrationEvent[] = []
+    const identities = new Map<string, StoredWorkflowIdentity>()
+    const conflicts = new Set<string>()
+    const eventIds = new Set<string>()
+    for (const value of events.slice(0, MAX_WORKFLOW_RECORDS)) {
+      const parsed = parseOrchestrationEvent(value, now)
+      if (!parsed || eventIds.has(parsed.eventId)) continue
+      eventIds.add(parsed.eventId)
+      accepted.push(parsed)
+      if (parsed.type !== 'workflow_session_registered') continue
+      const candidate = {
+        workflowId: parsed.workflowId, workflowName: parsed.workflowName,
+        workflowCreatedAt: parsed.workflowCreatedAt, workflowSource: parsed.workflowSource,
+        ...(parsed.workflowDescription ? { workflowDescription: parsed.workflowDescription } : {}),
+        provenance: 'Explicit orchestration event' as const, runtime: parsed.runtime,
+      }
+      const current = identities.get(parsed.sessionId)
+      if (current && JSON.stringify(current) !== JSON.stringify(candidate)) {
+        identities.delete(parsed.sessionId)
+        conflicts.add(parsed.sessionId)
+      } else if (!conflicts.has(parsed.sessionId)) identities.set(parsed.sessionId, candidate)
+    }
+    this.supplementalEvents = accepted
+    this.supplementalIdentities = identities
+    this.supplementalConflicts = conflicts
+    return previous !== JSON.stringify({ events: accepted.map(item => item.eventId), identities: [...identities] })
   }
 
   apply<T extends { id: string; runtime?: 'codex' | 'claude'; workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus }>(session: T): T & { workflow?: WorkflowIdentity; workflowMetadataStatus?: WorkflowMetadataStatus } {
@@ -219,9 +278,10 @@ export class WorkflowIdentityReader {
   }
 
   private snapshot(now: number): string {
-    return JSON.stringify({ identities: [...this.identities]
-      .filter(([, identity]) => !identity.expiresAt || Date.parse(identity.expiresAt) > now)
-      .map(([sessionId, identity]) => [sessionId, identity.workflowId]).concat(
+    const sessionIds = new Set([...this.identities.keys(), ...this.supplementalIdentities.keys()])
+    return JSON.stringify({ identities: [...sessionIds]
+      .map(sessionId => [sessionId, this.get(sessionId, undefined, now)?.workflowId ?? this.getMetadataStatus(sessionId)])
+      .filter(([, value]) => value).concat(
         [...this.metadataStatuses].map(([sessionId, metadata]) => [sessionId, metadata.status]),
       ), events: this.getOrchestrationEvents(now).map(event => event.eventId) })
   }

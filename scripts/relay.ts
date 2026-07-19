@@ -462,6 +462,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         codexWatcher?.getActiveSessions().find(session => session.id === lifecycle.sessionId),
       )
     })
+    codexWatcher.onOrchestrationChange(events => { workflowReader?.setSupplementalEvents(events) })
     codexWatcher.start()
   }
 
