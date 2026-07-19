@@ -4,6 +4,12 @@ dist
 *.local
 .next
 *.vsix
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.codex/
 
 # Auto-generated
 extension/README.md
@@ -22,6 +28,7 @@ extension/.vscode/
 
 # Claude Code
 .claude/
+.agent-flow/
 
 # Subdirectory lock files (project uses pnpm workspace)
 extension/package-lock.json

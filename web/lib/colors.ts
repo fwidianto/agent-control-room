@@ -233,9 +233,12 @@ export function getStateColor(state: AgentState): string {
     case 'thinking': return COLORS.thinking
     case 'tool_calling': return COLORS.tool_calling
     case 'complete': return COLORS.complete
+    case 'returned': return COLORS.complete
     case 'error': return COLORS.error
+    case 'blocked': return COLORS.waiting_permission
     case 'paused': return COLORS.paused
     case 'waiting_permission': return COLORS.waiting_permission
+    case 'waiting': return COLORS.waiting_permission
   }
 }
 

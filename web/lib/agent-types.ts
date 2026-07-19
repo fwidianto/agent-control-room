@@ -1,7 +1,7 @@
 // Agent Visualizer Types — Holographic Edition v2
 // Now with actual information visibility
 
-export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
+export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission' | 'waiting' | 'blocked' | 'returned'
 
 // Context window composition — the key insight
 export interface ContextBreakdown {
@@ -17,11 +17,16 @@ export interface Agent {
   name: string
   state: AgentState
   parentId: string | null
+  recordedParentId?: string
   tokensUsed: number
   tokensMax: number
+  /** False when the runtime did not authoritatively report token usage and capacity. */
+  contextKnown?: boolean
   contextBreakdown: ContextBreakdown
   toolCalls: number
   timeAlive: number
+  /** False when no authoritative session timing is available. */
+  elapsedKnown?: boolean
   x: number
   y: number
   vx: number
@@ -36,6 +41,7 @@ export interface Agent {
   model?: string
   currentTool?: string
   task?: string
+  statusLabel?: string
   spawnTime: number
   completeTime?: number
   opacity: number
@@ -134,6 +140,13 @@ export interface Edge {
   to: string
   type: 'parent-child' | 'tool'
   opacity: number
+}
+
+export interface EdgeSignal {
+  edgeId: string
+  direction: 'out' | 'in' | 'pulse'
+  label: string
+  timestamp: number
 }
 
 export interface Particle {

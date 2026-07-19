@@ -8,6 +8,7 @@ import {
   findDiscoveryAt as findDiscoveryAtPure,
 } from '@/components/agent-visualizer/canvas/index'
 import type { Transform } from './use-canvas-camera'
+import { isCanvasClickGesture } from '@/lib/interaction-gesture'
 
 interface InteractionCallbacks {
   onAgentClick: (agentId: string | null) => void
@@ -45,7 +46,7 @@ export function useCanvasInteraction({
 }: InteractionOptions) {
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
-  const dragTargetRef = useRef<{ type: 'canvas' | 'agent'; id?: string; startX: number; startY: number } | null>(null)
+  const dragTargetRef = useRef<{ type: 'canvas' | 'agent'; id?: string; startX: number; startY: number; originX: number; originY: number; didDrag: boolean } | null>(null)
   isDraggingRef.current = isDragging
 
   // Floaty agent drag
@@ -82,9 +83,9 @@ export function useCanvasInteraction({
       panVelocityRef.current = { vx: 0, vy: 0, active: false }
       setIsDragging(true)
       if (agentId) {
-        dragTargetRef.current = { type: 'agent', id: agentId, startX: e.clientX, startY: e.clientY }
+        dragTargetRef.current = { type: 'agent', id: agentId, startX: e.clientX, startY: e.clientY, originX: e.clientX, originY: e.clientY, didDrag: false }
       } else {
-        dragTargetRef.current = { type: 'canvas', startX: e.clientX, startY: e.clientY }
+        dragTargetRef.current = { type: 'canvas', startX: e.clientX, startY: e.clientY, originX: e.clientX, originY: e.clientY, didDrag: false }
         lastPanPosRef.current = { x: e.clientX, y: e.clientY, time: performance.now() }
       }
     }
@@ -114,10 +115,11 @@ export function useCanvasInteraction({
           active: false,
         }
         lastPanPosRef.current = { x: e.clientX, y: e.clientY, time: now }
-        dragTargetRef.current = { ...dragTarget, startX: e.clientX, startY: e.clientY }
+        dragTargetRef.current = { ...dragTarget, startX: e.clientX, startY: e.clientY, didDrag: dragTarget.didDrag || Math.abs(e.clientX - dragTarget.originX) + Math.abs(e.clientY - dragTarget.originY) >= ANIM.dragThresholdPx }
       } else if (dragTarget.type === 'agent' && dragTarget.id) {
         const screenDist = Math.abs(e.clientX - dragTarget.startX) + Math.abs(e.clientY - dragTarget.startY)
         if (screenDist > ANIM.dragThresholdPx) {
+          dragTarget.didDrag = true
           dragLerpRef.current = { targetX: pos.x, targetY: pos.y, agentId: dragTarget.id }
         }
       }
@@ -137,10 +139,8 @@ export function useCanvasInteraction({
         panVelocityRef.current.active = true
       }
     }
-    const screenDist = dt_
-      ? Math.abs(e.clientX - dt_.startX) + Math.abs(e.clientY - dt_.startY)
-      : 0
-    if (screenDist < ANIM.dragThresholdPx) {
+    const handleClick = !dt_ || isCanvasClickGesture(dt_.originX, dt_.originY, e.clientX, e.clientY, dt_.didDrag, ANIM.dragThresholdPx)
+    if (handleClick) {
       const pos = screenToCanvas(e.clientX, e.clientY)
       const agentId = findAgentAt(pos.x, pos.y)
       const p = drawPropsRef.current

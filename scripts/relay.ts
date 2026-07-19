@@ -22,6 +22,9 @@ import {
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
+import { enrichSessionList, resolveWorkflowLogPath, WorkflowIdentityReader } from '../extension/src/workflow-identity'
+import { selectOrchestrationUpdate } from '../extension/src/orchestration-events'
+import { buildRelayReplayMessages } from './relay-replay'
 
 const MAX_EVENT_BUFFER = 5000
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow')
@@ -101,17 +104,23 @@ function broadcastEvent(event: AgentEvent) {
 }
 
 let relayWorkspace: string | null = null
+let workflowReader: WorkflowIdentityReader | null = null
 
 function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string, known?: SessionInfo) {
   if (type === 'started') {
     const claude = sessions.get(sessionId)
+    const workflowMetadata = enrichSessionList(workflowReader, [{ id: sessionId, runtime: known?.runtime ?? 'claude' as const }])[0]
     broadcast(JSON.stringify({
       type: 'session-started',
-      session: known ?? {
+      session: {
+        ...(known ?? {
         id: sessionId, label, status: 'active', runtime: 'claude',
         startTime: claude?.sessionStartTime ?? Date.now(),
         lastActivityTime: claude?.lastActivityTime ?? Date.now(),
         ...(relayWorkspace ? { workspace: relayWorkspace } : {}),
+        }),
+        ...(workflowMetadata.workflow ? { workflow: workflowMetadata.workflow } : {}),
+        ...(workflowMetadata.workflowMetadataStatus ? { workflowMetadataStatus: workflowMetadata.workflowMetadataStatus } : {}),
       } as SessionInfo,
     }))
   } else if (type === 'ended') {
@@ -386,6 +395,9 @@ function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
 export async function createRelay(options: RelayOptions): Promise<Relay> {
   const { workspace } = options
   relayWorkspace = workspace
+  workflowReader = new WorkflowIdentityReader(resolveWorkflowLogPath(workspace))
+  workflowReader.refresh()
+  let orchestrationEventIds = workflowReader.getOrchestrationEvents().map(event => event.eventId)
   verbose = options.verbose ?? false
   // Keep warnings visible without --verbose — actionable hints (e.g. "Codex
   // sessions exist but none match this workspace") must reach the user.
@@ -450,8 +462,33 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         codexWatcher?.getActiveSessions().find(session => session.id === lifecycle.sessionId),
       )
     })
+    codexWatcher.onOrchestrationChange(events => { workflowReader?.setSupplementalEvents(events) })
     codexWatcher.start()
   }
+
+  const collectSessionList = (): SessionInfo[] => {
+    const sessionList: SessionInfo[] = []
+    for (const session of sessions.values()) {
+      if (!session.sessionDetected) continue
+      const info: SessionInfo = {
+        id: session.sessionId, label: session.label,
+        status: session.sessionCompleted ? 'completed' : 'active',
+        startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
+        runtime: 'claude', workspace,
+      }
+      sessionList.push(...enrichSessionList(workflowReader, [info]))
+    }
+    if (codexWatcher) sessionList.push(...enrichSessionList(workflowReader, codexWatcher.getActiveSessions()))
+    return sessionList
+  }
+
+  workflowReader.start(() => {
+    broadcast(JSON.stringify({ type: 'session-list', sessions: collectSessionList() }))
+    const events = workflowReader?.getOrchestrationEvents() ?? []
+    const message = selectOrchestrationUpdate(orchestrationEventIds, events)
+    orchestrationEventIds = events.map(event => event.eventId)
+    if (message.events.length > 0 || message.type === 'orchestration-snapshot') broadcast(JSON.stringify(message))
+  })
 
   const telemetry = options.telemetry
   const sessionStart = Date.now()
@@ -499,33 +536,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         log(`[sse] Client disconnected (${sseClients.size} total)`)
       })
 
-      // Send current session list (Claude + Codex)
-      const sessionList: SessionInfo[] = []
-      for (const session of sessions.values()) {
-        if (!session.sessionDetected) continue
-        sessionList.push({
-          id: session.sessionId, label: session.label,
-          status: session.sessionCompleted ? 'completed' : 'active',
-          startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
-          runtime: 'claude', workspace,
-        })
-      }
-      if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
-      if (sessionList.length > 0) {
-        sendSSE(res, { type: 'session-list', sessions: sessionList })
-      }
-
-      // Replay every session so aggregate summaries are complete on connect.
-      const sorted = [...sessionList].sort((a, b) => {
-        const aActive = a.status === 'active' ? 1 : 0
-        const bActive = b.status === 'active' ? 1 : 0
-        if (aActive !== bActive) return bActive - aActive
-        return b.lastActivityTime - a.lastActivityTime
-      })
-      for (const session of sorted) {
-        const buffered = eventBuffer.get(session.id)
-        if (buffered) sendSSE(res, { type: 'agent-event-batch', events: buffered })
-      }
+      const sessionList = collectSessionList()
+      for (const message of buildRelayReplayMessages(workflowReader?.getOrchestrationEvents() ?? [], sessionList, eventBuffer)) sendSSE(res, message)
     },
 
     dispose() {
@@ -533,6 +545,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       // callers or hot-reload could call this twice.
       if (relayDisposed) return
       relayDisposed = true
+      workflowReader?.dispose()
+      workflowReader = null
       const models = [...observedModels].sort().join(',').slice(0, 128)
       const runtimes = [wantClaude && 'claude', wantCodex && 'codex'].filter(Boolean).join(',')
       telemetry?.emit({

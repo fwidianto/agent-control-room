@@ -24,6 +24,8 @@ import { createLogger } from './logger'
 import {
   CodexRolloutParser, CodexRolloutState, createCodexRolloutState,
 } from './codex-rollout-parser'
+import { NativeCodexBridge } from './native-codex-bridge'
+import type { OrchestrationEvent } from './orchestration-events'
 import type { AgentSessionWatcher, SessionLifecycleEvent } from './session-runtime'
 import { TypedEventEmitter } from './typed-event-emitter'
 
@@ -137,14 +139,19 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
   private scanInterval: NodeJS.Timeout | null = null
   /** One-shot flag so the cwd-mismatch hint is logged at most once per process. */
   private cwdMismatchWarned = false
+  private readonly nativeBridge = new NativeCodexBridge()
 
   private readonly _onEvent = new TypedEventEmitter<AgentEvent>()
   private readonly _onSessionDetected = new TypedEventEmitter<string>()
   private readonly _onSessionLifecycle = new TypedEventEmitter<SessionLifecycleEvent>()
+  private readonly _onOrchestrationChange = new TypedEventEmitter<readonly OrchestrationEvent[]>()
 
   readonly onEvent = this._onEvent.event
   readonly onSessionDetected = this._onSessionDetected.event
   readonly onSessionLifecycle = this._onSessionLifecycle.event
+  readonly onOrchestrationChange = this._onOrchestrationChange.event
+
+  getOrchestrationEvents(): readonly OrchestrationEvent[] { return this.nativeBridge.getEvents() }
 
   /** Workspace path used as a cwd filter — Codex sessions are attached only if
    *  their session_meta.cwd matches this path (or is under it). Pass null/undefined
@@ -344,9 +351,12 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
 
     const result = readNewFileLines(session.filePath, session.fileSize, session.fileTail)
     if (!result) return
+    const truncated = result.newSize === 0 && session.fileSize > 0
     session.fileSize = result.newSize
     session.fileTail = result.tail
     session.lastActivityTime = Date.now()
+
+    let orchestrationChanged = truncated && this.nativeBridge.resetSession(sessionId)
 
     // Re-activate if the session had been marked complete on inactivity —
     // new content means the user resumed the Codex CLI.
@@ -360,6 +370,8 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
       try { session.parser.processLine(line, session.rolloutState) }
       catch (err) { log.debug('Parser threw on line:', err) }
     }
+    if (result.lines.length > 0) orchestrationChanged = this.nativeBridge.processLines(sessionId, result.lines) || orchestrationChanged
+    if (orchestrationChanged) this._onOrchestrationChange.fire(this.nativeBridge.getEvents())
 
     this.resetInactivityTimer(sessionId)
   }
@@ -394,5 +406,6 @@ export class CodexSessionWatcher implements AgentSessionWatcher {
     this._onEvent.dispose()
     this._onSessionDetected.dispose()
     this._onSessionLifecycle.dispose()
+    this._onOrchestrationChange.dispose()
   }
 }

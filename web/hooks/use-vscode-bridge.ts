@@ -3,7 +3,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
-import { summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
+import { mergeSessionList, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
+import { createOrchestrationState, reduceOrchestrationEvent, reduceOrchestrationSnapshot, type OrchestrationState } from '@/lib/orchestration-state'
+import { appendSessionActivity, appendSessionLifecycle, type SessionActivityEvent } from '@/lib/workflow-control-room'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -34,6 +36,10 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Authoritative state reduced only from accepted orchestration events. */
+  orchestrationState: OrchestrationState
+  /** Bounded, display-safe session activity for the workflow timeline. */
+  sessionActivity: SessionActivityEvent[]
 }
 
 /**
@@ -63,6 +69,9 @@ export function useVSCodeBridge(): BridgeHookResult {
    *  Prevents the animation frame from processing events in the wrong simulation context. */
   const sessionSwitchPendingRef = useRef(false)
   const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
+  const [orchestrationState, setOrchestrationState] = useState(createOrchestrationState)
+  const [sessionActivity, setSessionActivity] = useState<SessionActivityEvent[]>([])
+  const sessionStartsRef = useRef<Map<string, number>>(new Map())
 
   // Connect to standalone dev relay server via SSE when not in VS Code
   useEffect(() => {
@@ -127,6 +136,9 @@ export function useVSCodeBridge(): BridgeHookResult {
         sessionEventsRef.current.set(event.sessionId, buf)
         setSessions(prev => prev.map(session => session.id === event.sessionId
           ? updateSessionSummary(session, event) : session))
+        const start = sessionStartsRef.current.get(event.sessionId)
+        setSessionActivity(current => appendSessionActivity(current, event, event.sessionId!,
+          start === undefined ? Date.now() : start + event.time * 1000))
       }
 
       // Deliver to pending if session matches (ref is always current).
@@ -168,6 +180,11 @@ export function useVSCodeBridge(): BridgeHookResult {
       if (config.disable1MContext !== undefined) { setDisable1MContext(config.disable1MContext) }
     })
 
+    const unsubOrchestration = bridge.onOrchestration((type, events) => {
+      setOrchestrationState(current => type === 'snapshot' ? reduceOrchestrationSnapshot(events)
+        : events.reduce(reduceOrchestrationEvent, current))
+    })
+
     // Session lifecycle tracking
     // Note: these handlers only update session list + selection state.
     // Event flushing is handled by the consumer (index.tsx effect) to avoid
@@ -182,12 +199,16 @@ export function useVSCodeBridge(): BridgeHookResult {
         sessionEventsRef.current.clear()
         setSessionsWithActivity(new Set())
         dismissedSessionsRef.current.clear()
+        setOrchestrationState(createOrchestrationState())
+        setSessionActivity([])
+        sessionStartsRef.current.clear()
         setEventVersion(v => v + 1)
         return
       }
       if (type === 'list') {
         const sessionList = data as SessionSummary[]
-        setSessions(sessionList)
+        for (const session of sessionList) sessionStartsRef.current.set(session.id, session.startTime)
+        setSessions(prev => mergeSessionList(prev, sessionList))
         // Auto-select: prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
         if (!selectedSessionIdRef.current && sessionList.length > 0) {
@@ -205,6 +226,8 @@ export function useVSCodeBridge(): BridgeHookResult {
         }
       } else if (type === 'started') {
         const session = data as SessionInfo
+        sessionStartsRef.current.set(session.id, session.startTime)
+        setSessionActivity(current => appendSessionLifecycle(current, session.id, session.startTime, 'session_started'))
         setSessions(prev => {
           const existing = prev.find(s => s.id === session.id)
           if (existing) {
@@ -229,6 +252,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         ))
       } else if (type === 'ended') {
         const sessionId = data as string
+        setSessionActivity(current => appendSessionLifecycle(current, sessionId, Date.now(), 'session_inactive'))
         setSessions(prev => prev.map(s =>
           s.id === sessionId ? { ...s, status: 'completed' as const } : s
         ))
@@ -240,6 +264,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       unsubEvent()
       unsubStatus()
       unsubConfig()
+      unsubOrchestration()
       unsubSession()
     }
   }, [])
@@ -318,5 +343,7 @@ export function useVSCodeBridge(): BridgeHookResult {
     getSessionEventCount,
     sessionsWithActivity,
     removeSession,
+    orchestrationState,
+    sessionActivity,
   }
 }

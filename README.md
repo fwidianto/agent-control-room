@@ -21,7 +21,7 @@ Claude Code is powerful, but its execution is a black box — you see the final 
 - **Claude Code + Codex**: Auto-detects sessions from both runtimes concurrently and shows them side-by-side, or restrict to one via the `agentVisualizer.runtime` setting
 - **Claude Code hooks**: Lightweight HTTP hook server receives events directly from Claude Code for zero-latency streaming
 - **Codex rollout tailing**: Reads `~/.codex/sessions/**/rollout-*.jsonl` (respects `CODEX_HOME`) and surfaces tool calls, reasoning, and authoritative token counts from Codex's own event stream
-- **Multi-session support**: Track multiple concurrent agent sessions with tabs
+- **Agent control room**: Track ungrouped sessions and explicitly identified workflows together, with authoritative assignments and relationships when a local orchestration record provides them
 - **Interactive canvas**: Pan, zoom, click agents and tool calls to inspect details
 - **Timeline & transcript panels**: Review the full execution timeline, file attention heatmap, and message transcript
 - **JSONL log file support**: Point at any JSONL event log to replay or watch agent activity
@@ -79,6 +79,10 @@ You can also point Agent Flow at a JSONL event log file:
 1. Set `agentVisualizer.eventLogPath` in your VS Code settings to the path of a `.jsonl` file
 2. Agent Flow will tail the file and visualize events as they arrive
 
+### Workflow control room
+
+Workflow grouping and relationships are optional and come only from explicit local orchestration records; Agent Flow never guesses them from workspace or timing. See the [operations guide](docs/AGENT_CONTROL_ROOM.md) and [version 1 protocol](docs/ORCHESTRATION_EVENT_PROTOCOL.md).
+
 ## Commands
 
 | Command | Description |
@@ -118,6 +122,8 @@ pnpm run setup      # configure Claude Code hooks (one-time)
 pnpm run dev        # start dev server + event relay
 ```
 
+On Windows PowerShell, use `pnpm.cmd` (for example, `pnpm.cmd run dev`). The root development scripts set their environment variables portably on Windows, macOS, and Linux.
+
 `pnpm run dev` starts both the Next.js dev server and an event relay that receives Claude Code events and streams them to the browser via SSE.
 
 Other scripts:
@@ -150,9 +156,9 @@ duration, event count, OS/arch, Agent Flow version, distinct model IDs
 observed, which runtimes were watched, and error class names. Prompts, file
 paths, tool calls, user info, and environment variables are never sent.
 
-- **Turn off:** `export AGENT_FLOW_TELEMETRY=false` or `export DO_NOT_TRACK=1`
+- **Turn off:** macOS/Linux: `export AGENT_FLOW_TELEMETRY=false`; PowerShell: `$env:AGENT_FLOW_TELEMETRY = 'false'` (or set `DO_NOT_TRACK=1`)
   (disabled installs write zero state to disk — no `~/.agent-flow/` directory)
-- **Inspect the payload:** `cat ~/.agent-flow/telemetry/events.jsonl`
+- **Inspect the payload:** macOS/Linux: `cat ~/.agent-flow/telemetry/events.jsonl`; PowerShell: `Get-Content "$HOME\.agent-flow\telemetry\events.jsonl"`
 - **Full schema + exact fields:** see the v0.8.1 entry in
   [extension/CHANGELOG.md](extension/CHANGELOG.md) or the `serialize()` function
   in [scripts/telemetry.ts](scripts/telemetry.ts)
