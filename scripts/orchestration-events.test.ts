@@ -54,6 +54,11 @@ test('rejects unsupported, malformed, cyclic-self, and private raw content', () 
   assert.equal(parseOrchestrationEvent(base('agent_registered', { ...validByType.agent_registered, authorization: 'private' })), null)
   assert.equal(parseOrchestrationEvent(base('agent_registered', { ...validByType.agent_registered, cookie: 'private' })), null)
   assert.equal(parseOrchestrationEvent(base('agent_registered', { ...validByType.agent_registered, metadata: { unknown: true } })), null)
+  for (const type of ORCHESTRATION_EVENT_TYPES.filter(type => type.startsWith('workflow_') || type.startsWith('assignment_'))) {
+    assert.equal(parseOrchestrationEvent(base(type, { ...validByType[type], status: 'returned' })), null, type)
+  }
+  assert.equal(parseOrchestrationEvent(base('agent_returned', validByType.agent_returned))?.type, 'agent_returned')
+  assert.equal(parseOrchestrationEvent(base('workflow_updated', { status: 'failed' }))?.status, 'failed')
   assert.deepEqual(parseOrchestrationEvent(base('agent_registered', { ...validByType.agent_registered,
     metadata: { attempt: 2, priority: 'high', progressPercent: 50, retryable: true } }))?.metadata,
   { attempt: 2, priority: 'high', progressPercent: 50, retryable: true })

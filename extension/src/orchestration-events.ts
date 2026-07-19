@@ -161,6 +161,7 @@ export function parseOrchestrationEvent(value: unknown, now = Date.now()): Orche
   const status = record.status === undefined ? undefined
     : ['active', 'waiting', 'blocked', 'returned', 'completed', 'failed'].includes(String(record.status)) ? record.status as OrchestrationStatus : null
   if (status === null) return null
+  if (status === 'returned' && (common.type.startsWith('workflow_') || common.type.startsWith('assignment_'))) return null
 
   switch (common.type) {
     case 'workflow_session_registered': {

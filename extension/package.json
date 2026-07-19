@@ -82,7 +82,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "cp ../README.md ./README.md && pnpm run build:all",
+    "vscode:prepublish": "node -e \"require('node:fs').copyFileSync('../README.md', 'README.md')\" && pnpm run build:all",
     "build": "node esbuild.js",
     "build:webview": "cd ../web && pnpm run build:webview",
     "build:all": "pnpm run build:webview && pnpm run build",

@@ -4,6 +4,12 @@ dist
 *.local
 .next
 *.vsix
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.codex/
 
 # Auto-generated
 extension/README.md
