@@ -63,3 +63,11 @@ Manual `.agent-flow/orchestration.jsonl` protocol v1 remains enabled and Claude/
 The bridge may retain only IDs, timestamps, Codex runtime, workspace match, agent path/nickname, safe task name, lifecycle discriminator, and status discriminator. It must never emit or retain prompts, assignment messages, transcript bodies, final messages, tool input/output, reasoning, titles, previews, first-user messages, environment data, tokens, credentials, cookies, or log bodies.
 
 History remains bounded by the existing recent-session scan and protocol event caps. A missing or disabled Codex runtime is a silent no-op. Unsupported states remain Unknown; inactivity remains Inactive at the session layer and never becomes completion.
+
+## Deferred roadmap
+
+These milestones are explicitly deferred and are not blockers for the Stage 8 checkpoint:
+
+- **Packaged application experience:** ship a desktop application with simpler startup, application-window management, reliable background services, visible connection status, installation, and updates.
+- **UX and language audit:** review redundant copy, conflicting or duplicated statuses, unclear labels, excessive technical IDs, terminology consistency, repeated metrics, truncation, spacing, visual hierarchy, and normal/fullscreen navigation.
+- **Live agent-to-artifact interaction:** extend the canvas with authoritative agent-to-command, file, patch, tool, result, and review-finding activity. Never infer file ownership, messages, edits, or handoffs when Codex does not expose them.
