@@ -8,7 +8,7 @@ import type { SessionSummary } from '../web/lib/session-summary'
 import {
   appendSessionActivity, buildAgentForest, buildWorkflowTimeline, CONTROL_ROOM_RENDER_LIMIT,
   CONTROL_ROOM_TIMELINE_LIMIT, filterWorkflowTimeline, partitionSessionActivity, workflowMetrics, workflowStatus,
-  sessionOrchestrationContext,
+  latestAgentEdgeInteraction, limitAgentForest, sessionOrchestrationContext,
 } from '../web/lib/workflow-control-room'
 
 let serial = 0
@@ -97,6 +97,18 @@ test('uses hierarchy only for complete explicit registered delegations', () => {
     event('delegation_created', { agentId: 'child', parentAgentId: 'missing' }),
   ])
   assert.equal(buildAgentForest('workflow-1', unresolved).hierarchical, false)
+
+  const capped = reduceOrchestrationSnapshot([
+    ...Array.from({ length: 99 }, (_, index) => event('agent_registered', { agentId: `root-${index}` })),
+    event('agent_registered', { agentId: 'child-before-parent' }),
+    event('agent_registered', { agentId: 'parent-after-child' }),
+    event('delegation_created', { agentId: 'child-before-parent', parentAgentId: 'parent-after-child' }),
+  ])
+  const limited = limitAgentForest(buildAgentForest('workflow-1', capped).roots, 100)
+  const child = limited.flatMap(root => root.children).find(node => node.agent.agentId === 'child-before-parent')
+  assert.equal(child, undefined)
+  assert.equal(limited.some(root => root.agent.agentId === 'parent-after-child'), true)
+  assert.equal(limited.some(root => root.agent.agentId === 'child-before-parent'), false)
 })
 
 test('builds selected-session identity and breadcrumb only from explicit orchestration relationships', () => {
@@ -122,6 +134,52 @@ test('builds selected-session identity and breadcrumb only from explicit orchest
   assert.equal(unknown.agentName, 'Agent identity unavailable')
   assert.equal(unknown.parent, undefined)
   assert.deepEqual(unknown.children, [])
+})
+
+test('maps only authoritative lifecycle events onto hierarchy edges', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('agent_registered', { agentId: 'luna', sessionId: 'luna-session' }),
+    event('assignment_created', { assignmentId: 'work', agentId: 'luna' }),
+    event('assignment_updated', { agentId: 'luna', assignmentId: 'work' }),
+    event('assignment_started', { agentId: 'luna', assignmentId: 'work', timestamp: '2026-07-17T00:00:01.000Z' }),
+    event('agent_returned', { agentId: 'luna', timestamp: '2026-07-17T00:00:02.000Z' }),
+  ])
+  assert.deepEqual(latestAgentEdgeInteraction('workflow-1', 'luna', state), {
+    type: 'agent_returned', label: 'Returned', direction: 'in', timestamp: Date.parse('2026-07-17T00:00:02.000Z'),
+  })
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'terra', state), undefined)
+
+  const lifecycle = reduceOrchestrationSnapshot([
+    event('assignment_started', { agentId: 'luna', assignmentId: 'work' }),
+    event('assignment_failed', { agentId: 'terra', assignmentId: 'review' }),
+    event('agent_resumed', { agentId: 'sol' }),
+  ])
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'luna', lifecycle)?.direction, 'pulse')
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'terra', lifecycle)?.direction, 'pulse')
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'sol', lifecycle)?.direction, 'pulse')
+
+  const missingOwner = reduceOrchestrationSnapshot([
+    event('assignment_created', { assignmentId: 'moved', agentId: 'terra' }),
+    event('assignment_started', { assignmentId: 'moved' }),
+  ])
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'terra', missingOwner), undefined)
+
+  const resumedAfterReturn = reduceOrchestrationSnapshot([
+    event('agent_returned', { agentId: 'luna', timestamp: '2026-07-17T00:00:01.000Z' }),
+    event('agent_status_updated', { agentId: 'luna', status: 'active', timestamp: '2026-07-17T00:00:02.000Z' }),
+  ])
+  assert.equal(latestAgentEdgeInteraction('workflow-1', 'luna', resumedAfterReturn), undefined)
+
+  for (const newer of [
+    event('assignment_blocked', { agentId: 'luna', assignmentId: 'work', timestamp: '2026-07-17T00:00:02.000Z' }),
+    event('assignment_updated', { agentId: 'luna', assignmentId: 'work', status: 'completed', timestamp: '2026-07-17T00:00:02.000Z' }),
+    event('assignment_created', { agentId: 'luna', assignmentId: 'new-work', timestamp: '2026-07-17T00:00:02.000Z' }),
+  ]) {
+    const superseded = reduceOrchestrationSnapshot([
+      event('assignment_started', { agentId: 'luna', assignmentId: 'work', timestamp: '2026-07-17T00:00:01.000Z' }), newer,
+    ])
+    assert.equal(latestAgentEdgeInteraction('workflow-1', 'luna', superseded), undefined)
+  }
 })
 
 test('combines delayed orchestration and session activity deterministically and filters every owner field', () => {
@@ -177,7 +235,7 @@ test('large timeline construction remains bounded and fast', () => {
 
 test('control room source preserves semantic labels, keyboard focus, reduced DOM volume, and detail navigation', () => {
   const source = readFileSync(new URL('../web/components/agent-visualizer/control-room.tsx', import.meta.url), 'utf8')
-  for (const marker of ['aria-label="Authoritative agent relationships"', '<fieldset>', '<legend', 'focus-visible:', 'Open details', 'onOpen(item.sessionId!)', 'CONTROL_ROOM_RENDER_LIMIT', 'No sessions explicitly registered.']) assert.ok(source.includes(marker), `missing ${marker}`)
+  for (const marker of ['aria-label="Live agent interaction graph"', 'edge-signal', 'Explicit parent-child relationships', 'CONTROL_ROOM_GRAPH_LIMIT', '<article', 'Open agent detail', '<fieldset>', '<legend', 'focus-visible:', 'Open details', 'onOpen(item.sessionId!)', 'CONTROL_ROOM_RENDER_LIMIT', 'No sessions explicitly registered.']) assert.ok(source.includes(marker), `missing ${marker}`)
   assert.doesNotMatch(source, /AgentVisualizer/)
   const indexSource = readFileSync(new URL('../web/components/agent-visualizer/index.tsx', import.meta.url), 'utf8')
   assert.ok(indexSource.includes('bridge.sessions.length > 0 || bridge.orchestrationState.workflows.size > 0'))

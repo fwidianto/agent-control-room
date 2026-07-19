@@ -5,6 +5,7 @@ import { interpretActivity, sessionStatus, type SessionSummary } from './session
 
 export const CONTROL_ROOM_TIMELINE_LIMIT = 5_000
 export const CONTROL_ROOM_RENDER_LIMIT = 200
+export const CONTROL_ROOM_GRAPH_LIMIT = 100
 
 export type ControlRoomStatus = 'Active' | 'Waiting' | 'Blocked' | 'Inactive' | 'Completed' | 'Failed' | 'Unknown'
 
@@ -38,6 +39,13 @@ export interface TimelineFilters {
 export interface AgentTreeNode {
   agent: AgentOrchestrationState
   children: AgentTreeNode[]
+}
+
+export type AgentEdgeInteraction = {
+  type: string
+  label: string
+  timestamp: number
+  direction: 'out' | 'in' | 'pulse'
 }
 
 export interface SessionOrchestrationContext {
@@ -205,6 +213,57 @@ export function buildAgentForest(workflowId: string, state: OrchestrationState):
     hierarchical = true
   }
   return { roots: agents.filter(agent => !childIds.has(agent.agentId)).map(agent => nodes.get(agent.agentId)!), hierarchical }
+}
+
+export function limitAgentForest(roots: readonly AgentTreeNode[], limit: number): AgentTreeNode[] {
+  let remaining = Math.max(0, limit)
+  const visit = (node: AgentTreeNode): AgentTreeNode | undefined => {
+    if (!remaining) return undefined
+    remaining--
+    const children: AgentTreeNode[] = []
+    for (const child of node.children) {
+      const included = visit(child)
+      if (included) children.push(included)
+    }
+    return { agent: node.agent, children }
+  }
+  const limited: AgentTreeNode[] = []
+  for (const root of roots) {
+    const included = visit(root)
+    if (included) limited.push(included)
+  }
+  return limited
+}
+
+const edgeEventLabels: Partial<Record<OrchestrationEventType, { label: string; direction: AgentEdgeInteraction['direction'] }>> = {
+  delegation_created: { label: 'Delegated', direction: 'out' },
+  assignment_started: { label: 'Assignment started', direction: 'pulse' },
+  agent_waiting: { label: 'Waiting', direction: 'pulse' },
+  agent_resumed: { label: 'Resumed', direction: 'pulse' },
+  agent_returned: { label: 'Returned', direction: 'in' },
+  assignment_completed: { label: 'Completed', direction: 'pulse' },
+  assignment_failed: { label: 'Failed', direction: 'pulse' },
+}
+
+export function latestAgentEdgeInteractions(workflowId: string, state: OrchestrationState): Map<string, AgentEdgeInteraction> {
+  const interactions = new Map<string, AgentEdgeInteraction>()
+  const seenLifecycle = new Set<string>()
+  const events = state.eventsByWorkflow.get(workflowId) ?? []
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index].event
+    const mapped = edgeEventLabels[event.type]
+      ?? (event.type === 'agent_status_updated' && (event.status === 'completed' || event.status === 'failed' || event.status === 'returned')
+        ? { label: title(event.status), direction: 'pulse' as const } : undefined)
+    const lifecycleBoundary = Boolean(mapped) || event.type.startsWith('agent_') || event.type.startsWith('assignment_')
+    if (!lifecycleBoundary || !event.agentId || seenLifecycle.has(event.agentId)) continue
+    seenLifecycle.add(event.agentId)
+    if (mapped) interactions.set(event.agentId, { type: event.type, label: mapped.label, direction: mapped.direction, timestamp: Date.parse(event.timestamp) })
+  }
+  return interactions
+}
+
+export function latestAgentEdgeInteraction(workflowId: string, agentId: string, state: OrchestrationState): AgentEdgeInteraction | undefined {
+  return latestAgentEdgeInteractions(workflowId, state).get(agentId)
 }
 
 export function workflowMetrics(workflowId: string, state: OrchestrationState, sessions: readonly SessionSummary[], now: number) {
