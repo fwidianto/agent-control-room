@@ -69,6 +69,14 @@ test('rejects mismatched relationship metadata and wrong-recipient lifecycle han
   })])
   assert.equal(malformed.getEvents().length, 0)
 
+  const roleMismatch = new NativeCodexBridge()
+  roleMismatch.processLines(childId, [line('2026-07-19T12:00:00.000Z', 'session_meta', {
+    id: childId, session_id: rootId, parent_thread_id: rootId, forked_from_id: rootId,
+    thread_source: 'subagent', agent_path: '/root/luna', agent_role: 'Builder',
+    source: { subagent: { thread_spawn: { parent_thread_id: rootId, agent_path: '/root/luna', agent_role: 'Reviewer' } } },
+  })])
+  assert.equal(roleMismatch.getEvents().length, 0)
+
   const bridge = new NativeCodexBridge()
   bridge.processLines(childId, [
     line('2026-07-19T12:00:00.000Z', 'session_meta', {
@@ -85,14 +93,20 @@ test('rejects mismatched relationship metadata and wrong-recipient lifecycle han
   assert.equal(bridge.getEvents().some(event => ['agent_returned', 'agent_resumed', 'agent_status_updated'].includes(event.type)), false)
 })
 
-test('bounds retained native turns deterministically', () => {
+test('bounds mixed retained native records deterministically', () => {
   const bridge = fixture()
   const lines: string[] = []
-  for (let index = 0; index < 600; index++) {
+  for (let index = 0; index < 300; index++) {
     lines.push(line(`2026-07-20T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`, 'event_msg', { type: 'task_started', turn_id: `bounded-${index}` }))
   }
+  for (let index = 0; index < 300; index++) {
+    const at = `2026-07-20T01:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}`
+    lines.push(line(`${at}.000Z`, 'response_item', { type: 'function_call', name: 'wait_agent', call_id: `bounded-wait-${index}`, arguments: '{}' }))
+    lines.push(line(`${at}.100Z`, 'response_item', { type: 'function_call_output', call_id: `bounded-wait-${index}`, output: JSON.stringify({ timed_out: true }) }))
+  }
   bridge.processLines(childId, lines)
-  assert.ok(bridge.getEvents().filter(event => event.eventId.includes(':turn:bounded-')).length <= 512)
+  const retained = bridge.getEvents().filter(event => event.eventId.includes(':turn:bounded-') || event.eventId.includes(':wait:bounded-wait-'))
+  assert.ok(retained.length <= 512)
 })
 
 test('supplemental native events group real Codex sessions without a manual sidecar', () => {

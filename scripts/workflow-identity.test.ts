@@ -182,6 +182,28 @@ test('manual and native membership conflicts suppress both phantom workflows', (
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('one expired membership does not suppress a healthy workflow member', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-flow-partial-expiry-'))
+  const file = join(dir, 'orchestration.jsonl')
+  try {
+    const expiresAt = '2026-07-17T00:01:00.000Z'
+    writeFileSync(file, [
+      record({ eventId: 'expired-member', expiresAt }),
+      record({ eventId: 'healthy-member', sessionId: 'session-2' }),
+      { eventId: 'workflow-start', eventVersion: 1, type: 'workflow_started', timestamp: '2026-07-16T23:00:00.000Z', source: 'launcher', workflowId: 'workflow-1', workflowName: 'Release' },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n')
+    const reader = new WorkflowIdentityReader(file)
+    reader.refresh(now)
+    reader.refresh(now + 61_000)
+    assert.equal(reader.get('session-1', 'codex', now + 61_000), undefined)
+    assert.equal(reader.get('session-2', 'codex', now + 61_000)?.workflowId, 'workflow-1')
+    const events = reader.getOrchestrationEvents(now + 61_000)
+    assert.ok(events.some(event => event.eventId === 'healthy-member'))
+    assert.ok(events.some(event => event.eventId === 'workflow-start'))
+    assert.equal(events.some(event => event.eventId === 'expired-member'), false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('one combined bound reserves capacity for native and manual events', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-flow-combined-bound-'))
   const file = join(dir, 'orchestration.jsonl')

@@ -52,6 +52,7 @@ interface NativeThread {
   spawns: Map<string, NativeSpawn>
   waits: Map<string, { startedAt: string; resumedAt?: string }>
   statuses: Map<string, NativeStatusObservation>
+  retainedRecords: Set<string>
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -98,7 +99,7 @@ export class NativeCodexBridge {
       thread = {
         id: sessionId,
         ownRecordsStarted: false, triggerPending: false, pendingTaskStarts: [],
-        turns: new Map(), calls: new Map(), spawns: new Map(), waits: new Map(), statuses: new Map(),
+        turns: new Map(), calls: new Map(), spawns: new Map(), waits: new Map(), statuses: new Map(), retainedRecords: new Set(),
       }
       this.threads.set(sessionId, thread)
       this.revision++
@@ -126,13 +127,16 @@ export class NativeCodexBridge {
         const forkedFromId = safeText(payload.forked_from_id)
         const source = object(payload.source)
         const spawn = object(object(source?.subagent)?.thread_spawn)
+        const nickname = safeText(payload.agent_nickname)
+        const agentRole = safeText(payload.agent_role)
         if (!parentId || !rootId || !agentPath || !THREAD_ID.test(parentId) || !THREAD_ID.test(rootId)
-          || forkedFromId !== parentId || spawn?.parent_thread_id !== parentId || spawn.agent_path !== agentPath) return
+          || forkedFromId !== parentId || spawn?.parent_thread_id !== parentId || spawn.agent_path !== agentPath
+          || nickname !== safeText(spawn.agent_nickname) || agentRole !== safeText(spawn.agent_role)) return
         thread.parentId = parentId
         thread.rootId = rootId
         thread.agentPath = agentPath
-        thread.nickname = safeText(payload.agent_nickname)
-        thread.agentRole = safeText(payload.agent_role)
+        thread.nickname = nickname
+        thread.agentRole = agentRole
         this.revision++
       } else {
         thread.rootId = thread.id
@@ -148,7 +152,7 @@ export class NativeCodexBridge {
       const callId = safeText(payload.event_id)
       if (payload.kind !== 'started' || !childId || !THREAD_ID.test(childId) || !agentPath || !callId) return
       if (childId === thread.id) this.activate(thread, false)
-      if (thread.ownRecordsStarted) this.setBounded(thread.spawns, callId, { callId, childId, agentPath, timestamp: at })
+      if (thread.ownRecordsStarted) this.setBounded(thread, 'spawn', thread.spawns, callId, { callId, childId, agentPath, timestamp: at })
       return
     }
 
@@ -181,7 +185,7 @@ export class NativeCodexBridge {
       const turn = thread.turns.get(turnId) ?? { id: turnId }
       if (payload.type === 'task_started') turn.startedAt = at
       else turn.completedAt = at
-      this.setBounded(thread.turns, turnId, turn)
+      this.setBounded(thread, 'turn', thread.turns, turnId, turn)
       return
     }
 
@@ -194,8 +198,8 @@ export class NativeCodexBridge {
       if (name === 'spawn_agent') {
         try { call.taskName = safeText(object(JSON.parse(String(payload.arguments)))?.task_name) } catch {}
       }
-      this.setBounded(thread.calls, callId, call)
-      if (name === 'wait_agent') this.setBounded(thread.waits, callId, { startedAt: at })
+      this.setBounded(thread, 'call', thread.calls, callId, call)
+      if (name === 'wait_agent') this.setBounded(thread, 'wait', thread.waits, callId, { startedAt: at })
       return
     }
 
@@ -219,21 +223,23 @@ export class NativeCodexBridge {
       const completed = object(rawStatus)
       const status: NativeStatus | undefined = rawStatus === 'running' ? 'running'
         : completed && Object.prototype.hasOwnProperty.call(completed, 'completed') ? 'completed' : undefined
-      if (agentPath && status) this.setBounded(thread.statuses, `${call.id}:${agentPath}`, { callId: call.id, agentPath, status, timestamp: at })
+      if (agentPath && status) this.setBounded(thread, 'status', thread.statuses, `${call.id}:${agentPath}`, { callId: call.id, agentPath, status, timestamp: at })
     }
   }
 
   private activate(thread: NativeThread, promotePending = true): void {
     thread.ownRecordsStarted = true
     const ownStart = promotePending ? thread.pendingTaskStarts.at(-1) : undefined
-    if (ownStart) this.setBounded(thread.turns, ownStart.id, ownStart)
+    if (ownStart) this.setBounded(thread, 'turn', thread.turns, ownStart.id, ownStart)
     thread.pendingTaskStarts.length = 0
     thread.triggerPending = false
     this.revision++
   }
 
-  private setBounded<T>(map: Map<string, T>, key: string, value: T): void {
-    if (!map.has(key) && map.size >= MAX_NATIVE_RECORDS_PER_THREAD) return
+  private setBounded<T>(thread: NativeThread, category: string, map: Map<string, T>, key: string, value: T): void {
+    const retainedKey = `${category}:${key}`
+    if (!map.has(key) && thread.retainedRecords.size >= MAX_NATIVE_RECORDS_PER_THREAD) return
+    thread.retainedRecords.add(retainedKey)
     map.set(key, value)
     this.revision++
   }

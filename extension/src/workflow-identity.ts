@@ -88,13 +88,22 @@ export class WorkflowIdentityReader {
   getDiagnostics(): readonly WorkflowReaderDiagnostic[] { return [...this.diagnostics] }
   getOrchestrationEvents(now = Date.now()): readonly OrchestrationEvent[] {
     const combined = [...this.orchestrationEvents, ...this.supplementalEvents]
-    const invalidWorkflows = new Set(combined
-      .filter((event): event is WorkflowSessionRegisteredRecord => event.type === 'workflow_session_registered'
-        && this.get(event.sessionId, event.runtime, now)?.workflowId !== event.workflowId)
-      .map(event => event.workflowId))
+    const invalidWorkflows = new Set(this.conflictedWorkflows)
+    for (const sessionId of this.supplementalConflicts) {
+      for (const event of combined) if (event.type === 'workflow_session_registered' && event.sessionId === sessionId) invalidWorkflows.add(event.workflowId)
+    }
+    for (const [sessionId, manual] of this.identities) {
+      const supplemental = this.supplementalIdentities.get(sessionId)
+      if (supplemental && JSON.stringify({ ...manual, expiresAt: undefined }) !== JSON.stringify(supplemental)) {
+        invalidWorkflows.add(manual.workflowId)
+        invalidWorkflows.add(supplemental.workflowId)
+      }
+    }
     const seen = new Set<string>()
     const valid = combined.filter(event => {
       if (invalidWorkflows.has(event.workflowId) || seen.has(event.eventId)) return false
+      if (event.type === 'workflow_session_registered'
+        && this.get(event.sessionId, event.runtime, now)?.workflowId !== event.workflowId) return false
       seen.add(event.eventId)
       return true
     })
