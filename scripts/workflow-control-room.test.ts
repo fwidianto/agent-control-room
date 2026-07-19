@@ -5,8 +5,10 @@ import { performance } from 'node:perf_hooks'
 import { reduceOrchestrationSnapshot } from '../web/lib/orchestration-state'
 import type { OrchestrationEvent, WorkflowIdentity } from '../web/lib/bridge-types'
 import type { SessionSummary } from '../web/lib/session-summary'
+import { isCanvasClickGesture } from '../web/lib/interaction-gesture'
+import { installFullscreenMode, shouldProcessCameraCommand } from '../web/lib/fullscreen-mode'
 import {
-  appendSessionActivity, buildAgentForest, buildWorkflowTimeline, CONTROL_ROOM_RENDER_LIMIT,
+  appendSessionActivity, buildAgentForest, buildWorkflowCanvasModel, buildWorkflowTimeline, CONTROL_ROOM_RENDER_LIMIT,
   CONTROL_ROOM_TIMELINE_LIMIT, filterWorkflowTimeline, partitionSessionActivity, workflowMetrics, workflowStatus,
   latestAgentEdgeInteraction, limitAgentForest, sessionOrchestrationContext,
 } from '../web/lib/workflow-control-room'
@@ -182,6 +184,110 @@ test('maps only authoritative lifecycle events onto hierarchy edges', () => {
   }
 })
 
+test('builds a bounded canvas model from explicit agents, sessions, and delegations', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('workflow_session_registered', { sessionId: 'root-session', runtime: 'codex' }),
+    event('workflow_session_registered', { sessionId: 'luna-session', runtime: 'codex' }),
+    event('agent_registered', { agentId: 'root', agentName: 'Sol', sessionId: 'root-session' }),
+    event('agent_registered', { agentId: 'luna', agentName: 'Luna', sessionId: 'luna-session' }),
+    event('delegation_created', { agentId: 'luna', parentAgentId: 'root' }),
+    event('assignment_created', { assignmentId: 'inspect', assignmentTitle: 'Inspect canvas', agentId: 'luna' }),
+    event('agent_returned', { agentId: 'luna', timestamp: '2026-07-17T00:00:02.000Z' }),
+  ])
+  const sessions = [
+    { ...session('root-session'), runtime: 'codex' as const, activity: 'Coordinating agents' },
+    { ...session('luna-session'), runtime: 'codex' as const, activity: 'Inspecting source files' },
+  ]
+  const model = buildWorkflowCanvasModel('workflow-1', state, sessions, [])
+  assert.equal(model.agents.size, 2)
+  assert.equal(model.edges.length, 1)
+  assert.equal(model.edges[0].from, 'root')
+  assert.equal(model.agents.get('root')?.y, 0)
+  assert.equal(model.agents.get('luna')?.y, 180)
+  assert.equal(model.agents.get('luna')?.currentTool, 'Inspecting source files')
+  assert.equal(model.agents.get('luna')?.task, 'Inspect canvas')
+  assert.equal(model.agents.get('luna')?.messageBubbles.length, 0)
+  assert.deepEqual(model.signals, [{ edgeId: 'edge-root-luna', direction: 'in', label: 'Returned', timestamp: Date.parse('2026-07-17T00:00:02.000Z') }])
+})
+
+test('does not fabricate missing context or elapsed telemetry', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('agent_registered', { agentId: 'no-session' }),
+    event('agent_registered', { agentId: 'no-tokens', sessionId: 'session-no-tokens' }),
+    event('agent_registered', { agentId: 'known-zero', sessionId: 'session-known-zero' }),
+  ])
+  const noTokens = { ...session('session-no-tokens'), tokens: undefined, tokensMax: undefined }
+  const knownZero = { ...session('session-known-zero'), tokens: 0, tokensMax: 200 }
+  const model = buildWorkflowCanvasModel('workflow-1', state, [noTokens, knownZero], [])
+  assert.equal(model.agents.get('no-session')?.contextKnown, false)
+  assert.equal(model.agents.get('no-session')?.elapsedKnown, false)
+  assert.equal(model.agents.get('no-session')?.tokensMax, 0)
+  assert.equal(model.agents.get('no-tokens')?.contextKnown, false)
+  assert.equal(model.agents.get('no-tokens')?.elapsedKnown, true)
+  assert.equal(model.agents.get('known-zero')?.contextKnown, true)
+  assert.equal(model.agents.get('known-zero')?.tokensUsed, 0)
+  assert.equal(model.agents.get('known-zero')?.tokensMax, 200)
+})
+
+test('keeps orchestration lifecycle visuals truthful and conversation-free', () => {
+  for (const [status, visual] of [['waiting', 'waiting'], ['blocked', 'blocked'], ['returned', 'returned'], ['completed', 'complete'], ['failed', 'error']] as const) {
+    const state = reduceOrchestrationSnapshot([
+      event('agent_registered', { agentId: 'agent', sessionId: 'session-1' }),
+      event('agent_status_updated', { agentId: 'agent', status }),
+    ])
+    const agent = buildWorkflowCanvasModel('workflow-1', state, [session('session-1')], []).agents.get('agent')
+    assert.equal(agent?.state, visual)
+    assert.equal(agent?.statusLabel, status[0].toUpperCase() + status.slice(1))
+    assert.deepEqual(agent?.messageBubbles, [])
+  }
+})
+
+test('preserves an explicit missing parent without styling the child as root', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('agent_registered', { agentId: 'child', sessionId: 'child-session' }),
+    event('delegation_created', { agentId: 'child', parentAgentId: 'missing-parent' }),
+  ])
+  const child = buildWorkflowCanvasModel('workflow-1', state, [session('child-session')], []).agents.get('child')
+  assert.equal(child?.parentId, null)
+  assert.equal(child?.recordedParentId, 'missing-parent')
+  assert.equal(child?.isMain, false)
+})
+
+test('distinguishes clicks from cumulative canvas pans', () => {
+  assert.equal(isCanvasClickGesture(10, 10, 12, 11, false, 5), true)
+  assert.equal(isCanvasClickGesture(10, 10, 10, 10, true, 5), false)
+  assert.equal(isCanvasClickGesture(10, 10, 80, 10, false, 5), false)
+})
+
+test('fullscreen mode restores overflow and removes keyboard and frame work', () => {
+  let listener: ((event: KeyboardEvent) => void) | undefined
+  let cancelled = 0
+  let ready = 0
+  let exited = 0
+  const target = {
+    addEventListener: (_type: string, callback: EventListenerOrEventListenerObject) => { listener = callback as (event: KeyboardEvent) => void },
+    removeEventListener: (_type: string, callback: EventListenerOrEventListenerObject) => { if (listener === callback) listener = undefined },
+    requestAnimationFrame: (callback: FrameRequestCallback) => { callback(0); return 7 },
+    cancelAnimationFrame: (id: number) => { cancelled = id },
+  } as Pick<Window, 'addEventListener' | 'removeEventListener' | 'requestAnimationFrame' | 'cancelAnimationFrame'>
+  const style = { overflow: 'auto' }
+  const cleanup = installFullscreenMode(target, style, event => { if (event.key === 'Escape') exited++ }, () => { ready++ })
+  assert.equal(style.overflow, 'hidden')
+  assert.equal(ready, 1)
+  listener?.({ key: 'Escape' } as KeyboardEvent)
+  assert.equal(exited, 1)
+  cleanup()
+  assert.equal(style.overflow, 'auto')
+  assert.equal(listener, undefined)
+  assert.equal(cancelled, 7)
+})
+
+test('camera commands execute once even when viewport callbacks change', () => {
+  assert.equal(shouldProcessCameraCommand(undefined, 3), true)
+  assert.equal(shouldProcessCameraCommand(3, 3), false)
+  assert.equal(shouldProcessCameraCommand(3, 4), true)
+})
+
 test('combines delayed orchestration and session activity deterministically and filters every owner field', () => {
   const state = reduceOrchestrationSnapshot([
     event('workflow_started', { eventId: 'later', timestamp: '2026-07-17T00:00:03.000Z', workflowName: 'Release' }),
@@ -235,7 +341,11 @@ test('large timeline construction remains bounded and fast', () => {
 
 test('control room source preserves semantic labels, keyboard focus, reduced DOM volume, and detail navigation', () => {
   const source = readFileSync(new URL('../web/components/agent-visualizer/control-room.tsx', import.meta.url), 'utf8')
-  for (const marker of ['aria-label="Live agent interaction graph"', 'edge-signal', 'Explicit parent-child relationships', 'CONTROL_ROOM_GRAPH_LIMIT', '<article', 'Open agent detail', '<fieldset>', '<legend', 'focus-visible:', 'Open details', 'onOpen(item.sessionId!)', 'CONTROL_ROOM_RENDER_LIMIT', 'No sessions explicitly registered.']) assert.ok(source.includes(marker), `missing ${marker}`)
+  for (const marker of ['Live interaction canvas', '<fieldset>', '<legend', 'focus-visible:', 'Open details', 'onOpen(item.sessionId!)', 'CONTROL_ROOM_RENDER_LIMIT', 'No sessions explicitly registered.']) assert.ok(source.includes(marker), `missing ${marker}`)
+  const topologySource = readFileSync(new URL('../web/components/agent-visualizer/workflow-topology-canvas.tsx', import.meta.url), 'utf8')
+  for (const marker of ['Animated live agent interaction canvas', '<AgentCanvas', 'edgeSignals={model.signals}', 'showOperationalLabels', 'selectedAgentId={selectedAgentId}', 'Close details', 'Recent commands and tools', 'privacy-safe lifecycle data', 'Fullscreen canvas', 'Fullscreen interaction mode', 'Exit fullscreen', "event.key === 'Escape'", 'installFullscreenMode', 'aria-modal={fullscreen || undefined}', 'Secondary panels', 'cameraCommand={cameraCommand}']) assert.ok(topologySource.includes(marker), `missing ${marker}`)
+  const cameraSource = readFileSync(new URL('../web/hooks/use-canvas-camera.ts', import.meta.url), 'utf8')
+  for (const marker of ['const zoomBy', 'const recenter', 'forceAll', 'CAMERA.minZoom', 'CAMERA.maxZoom']) assert.ok(cameraSource.includes(marker), `missing camera behavior ${marker}`)
   assert.doesNotMatch(source, /AgentVisualizer/)
   const indexSource = readFileSync(new URL('../web/components/agent-visualizer/index.tsx', import.meta.url), 'utf8')
   assert.ok(indexSource.includes('bridge.sessions.length > 0 || bridge.orchestrationState.workflows.size > 0'))

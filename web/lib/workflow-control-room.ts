@@ -1,5 +1,6 @@
 import type { AgentEvent, OrchestrationEventType, OrchestrationStatus } from './bridge-types'
-import type { AgentOrchestrationState, OrchestrationState } from './orchestration-state'
+import { emptyContextBreakdown, type Agent, type Edge, type EdgeSignal } from './agent-types'
+import type { AgentOrchestrationState, AssignmentOrchestrationState, OrchestrationState } from './orchestration-state'
 import { orchestrationEntityKey } from './orchestration-state'
 import { interpretActivity, sessionStatus, type SessionSummary } from './session-summary'
 
@@ -39,6 +40,13 @@ export interface TimelineFilters {
 export interface AgentTreeNode {
   agent: AgentOrchestrationState
   children: AgentTreeNode[]
+}
+
+export interface WorkflowCanvasModel {
+  agents: Map<string, Agent>
+  edges: Edge[]
+  signals: EdgeSignal[]
+  totalAgents: number
 }
 
 export type AgentEdgeInteraction = {
@@ -264,6 +272,87 @@ export function latestAgentEdgeInteractions(workflowId: string, state: Orchestra
 
 export function latestAgentEdgeInteraction(workflowId: string, agentId: string, state: OrchestrationState): AgentEdgeInteraction | undefined {
   return latestAgentEdgeInteractions(workflowId, state).get(agentId)
+}
+
+function canvasAgentState(status?: OrchestrationStatus): Agent['state'] {
+  if (status === 'waiting') return 'waiting'
+  if (status === 'blocked') return 'blocked'
+  if (status === 'failed') return 'error'
+  if (status === 'returned') return 'returned'
+  if (status === 'completed') return 'complete'
+  if (status === 'active') return 'thinking'
+  return 'idle'
+}
+
+export function buildWorkflowCanvasModel(workflowId: string, state: OrchestrationState, sessions: readonly SessionSummary[], activities: readonly SessionActivityEvent[]): WorkflowCanvasModel {
+  const fullForest = buildAgentForest(workflowId, state)
+  const roots = limitAgentForest(fullForest.roots, CONTROL_ROOM_GRAPH_LIMIT)
+  const included = new Set<string>()
+  const positions = new Map<string, { x: number; y: number }>()
+  let leaf = 0
+  const place = (node: AgentTreeNode, depth: number): number => {
+    included.add(node.agent.agentId)
+    const childXs = node.children.map(child => place(child, depth + 1))
+    const x = childXs.length ? childXs.reduce((sum, value) => sum + value, 0) / childXs.length : leaf++ * 220
+    positions.set(node.agent.agentId, { x, y: depth * 180 })
+    return x
+  }
+  for (const root of roots) place(root, 0)
+  const xs = [...positions.values()].map(position => position.x)
+  const center = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 0
+  for (const position of positions.values()) position.x -= center
+
+  const sessionsById = new Map(sessions.map(session => [session.id, session]))
+  const activityCounts = new Map<string, number>()
+  for (const activity of activities) if (activity.type === 'tool_call_start') activityCounts.set(activity.sessionId, (activityCounts.get(activity.sessionId) ?? 0) + 1)
+  const assignmentsByAgent = new Map<string, AssignmentOrchestrationState[]>()
+  for (const assignment of state.assignments.values()) if (assignment.workflowId === workflowId && assignment.agentId) {
+    const assignments = assignmentsByAgent.get(assignment.agentId) ?? []
+    assignments.push(assignment)
+    assignmentsByAgent.set(assignment.agentId, assignments)
+  }
+  const agents = new Map<string, Agent>()
+  for (const agent of state.agents.values()) {
+    if (agent.workflowId !== workflowId || !included.has(agent.agentId)) continue
+    const position = positions.get(agent.agentId)!
+    const session = agent.sessionId ? sessionsById.get(agent.sessionId) : undefined
+    const delegation = state.delegations.get(orchestrationEntityKey(workflowId, agent.agentId))
+    const parentId = delegation && included.has(delegation.parentAgentId) ? delegation.parentAgentId : null
+    const runtime = session?.runtime
+    const neutral = `${runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude' : 'Agent'} ${agent.sessionId ? agent.sessionId.slice(-8) : agent.agentId.slice(-8)}`
+    const agentAssignments = assignmentsByAgent.get(agent.agentId) ?? []
+    const explicitAssignment = agent.assignmentId ? state.assignments.get(orchestrationEntityKey(workflowId, agent.assignmentId)) : undefined
+    const activeAssignments = agentAssignments.filter(assignment => assignment.status === 'active')
+    const assignment = (explicitAssignment ? explicitAssignment.assignmentTitle ?? explicitAssignment.assignmentId
+      : activeAssignments.length === 1 ? activeAssignments[0].assignmentTitle ?? activeAssignments[0].assignmentId
+      : activeAssignments.length > 1 ? 'Multiple active assignments' : undefined)
+      ?? (agentAssignments.length === 1 ? agentAssignments[0].assignmentTitle ?? agentAssignments[0].assignmentId : undefined)
+    const completed = session?.status === 'completed'
+    const contextKnown = session?.tokens !== undefined && session.tokensMax !== undefined
+    const elapsedKnown = session !== undefined && Number.isFinite(session.startTime) && Number.isFinite(session.lastActivityTime)
+    agents.set(agent.agentId, {
+      id: agent.agentId, name: `${agent.agentName ?? neutral}${agent.agentRole ? ` \u00b7 ${agent.agentRole}` : ''}`,
+      state: canvasAgentState(agent.status), parentId, recordedParentId: delegation?.parentAgentId,
+      tokensUsed: contextKnown ? session.tokens! : 0, tokensMax: contextKnown ? session.tokensMax! : 0, contextKnown,
+      contextBreakdown: emptyContextBreakdown(), toolCalls: agent.sessionId ? activityCounts.get(agent.sessionId) ?? 0 : 0,
+      timeAlive: completed && elapsedKnown ? Math.max(0, (session.lastActivityTime - session.startTime) / 1000) : 0, elapsedKnown,
+      x: position.x, y: position.y, vx: 0, vy: 0, pinned: true, isMain: !delegation,
+      runtime, model: session?.model, currentTool: session?.activity, task: assignment,
+      statusLabel: agent.status ? title(agent.status) : 'Unknown',
+      spawnTime: session ? session.startTime / 1000 : 0, completeTime: completed && session ? session.lastActivityTime / 1000 : undefined, opacity: 1, scale: 1, messageBubbles: [],
+    })
+  }
+  const edges: Edge[] = []
+  for (const delegation of state.delegations.values()) if (delegation.workflowId === workflowId && included.has(delegation.parentAgentId) && included.has(delegation.agentId)) {
+    edges.push({ id: `edge-${delegation.parentAgentId}-${delegation.agentId}`, from: delegation.parentAgentId, to: delegation.agentId, type: 'parent-child', opacity: 1 })
+  }
+  const interactions = latestAgentEdgeInteractions(workflowId, state)
+  const signals: EdgeSignal[] = []
+  for (const edge of edges) {
+    const interaction = interactions.get(edge.to)
+    if (interaction) signals.push({ edgeId: edge.id, direction: interaction.direction, label: interaction.label, timestamp: interaction.timestamp })
+  }
+  return { agents, edges, signals, totalAgents: [...state.agents.values()].filter(agent => agent.workflowId === workflowId).length }
 }
 
 export function workflowMetrics(workflowId: string, state: OrchestrationState, sessions: readonly SessionSummary[], now: number) {

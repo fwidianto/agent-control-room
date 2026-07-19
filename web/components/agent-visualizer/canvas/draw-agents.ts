@@ -61,6 +61,7 @@ export function drawContextComposition(
   agent: Agent,
   radius: number,
 ) {
+  if (agent.contextKnown === false) return
   const bd = agent.contextBreakdown
   const total = agent.tokensUsed
   if (total <= 0) return
@@ -113,6 +114,7 @@ export function drawContextRing(
   radius: number,
   time: number,
 ) {
+  if (agent.contextKnown === false) return
   const bd = agent.contextBreakdown
   const total = agent.tokensUsed
   if (total <= 0) return
@@ -238,7 +240,7 @@ function drawStateRing(ctx: CanvasRenderingContext2D, agent: Agent, r: number, c
 }
 
 function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, isWaiting: boolean) {
-  if (isWaiting) {
+  if (agent.state === 'waiting_permission') {
     // Geometric lock icon — fits the holographic style
     const s = r * 0.3
     ctx.save()
@@ -254,6 +256,10 @@ function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
     ctx.arc(agent.x, agent.y - s * 0.15, s * 0.4, Math.PI, 0)
     ctx.stroke()
     ctx.restore()
+  } else if (isWaiting) {
+    ctx.fillStyle = color + '90'
+    ctx.fillRect(agent.x - r * 0.16, agent.y - r * 0.25, r * 0.1, r * 0.5)
+    ctx.fillRect(agent.x + r * 0.06, agent.y - r * 0.25, r * 0.1, r * 0.5)
   } else if (agent.isMain) {
     drawAgentBrand(ctx, agent.x, agent.y, r, color + '90', agent.runtime)
   } else {
@@ -316,6 +322,22 @@ function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
   ctx.fillText(agentLabel, agent.x, agent.y + r + AGENT_DRAW.labelYOffset)
 }
 
+function drawOperationalLabels(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
+  const maxWidth = Math.max(120, r * 7)
+  const lines = [
+    `${agent.statusLabel ?? agent.state} · ${agent.elapsedKnown === false ? 'Elapsed unavailable' : `${agent.timeAlive.toFixed(0)}s`}`,
+    agent.task,
+    agent.currentTool,
+  ].filter((line): line is string => Boolean(line))
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+  ctx.font = '8px monospace'
+  lines.forEach((line, index) => {
+    ctx.fillStyle = index === 0 ? COLORS.textPrimary : COLORS.textDim
+    ctx.fillText(truncateText(ctx, line, maxWidth), agent.x, agent.y - r - 12 - (lines.length - index - 1) * 11)
+  })
+}
+
 function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
   const sy = agent.y - r - STATS_OVERLAY.yOffset
   ctx.fillStyle = COLORS.cardBgDark
@@ -339,6 +361,7 @@ export function drawAgents(
   hoveredAgentId: string | null,
   showStats: boolean,
   time: number,
+  showOperationalLabels = false,
 ) {
   for (const [id, agent] of agents) {
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
@@ -346,7 +369,7 @@ export function drawAgents(
     const isHovered = id === hoveredAgentId
     const isSelected = id === selectedAgentId
 
-    const isWaiting = agent.state === 'waiting_permission'
+    const isWaiting = agent.state === 'waiting_permission' || agent.state === 'waiting'
 
     const breathe = isWaiting
       ? Math.sin(time * AGENT_DRAW.waitingBreatheSpeed) * AGENT_DRAW.waitingBreatheAmp + 1
@@ -374,9 +397,10 @@ export function drawAgents(
     }
 
     drawAgentLabel(ctx, agent, r, isHovered)
+    if (showOperationalLabels) drawOperationalLabels(ctx, agent, r)
 
     // Context composition — ring for main agent, bar for sub-agents
-    if (agent.state !== 'complete' || agent.opacity > 0.5) {
+    if ((agent.state !== 'complete' && agent.state !== 'returned') || agent.opacity > 0.5) {
       if (agent.isMain) {
         drawContextRing(ctx, agent, r, time)
       }

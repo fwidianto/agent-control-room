@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
+import { Agent, Particle, Edge, EdgeSignal, Discovery, DepthParticle } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
@@ -22,6 +22,7 @@ import {
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { shouldProcessCameraCommand } from '@/lib/fullscreen-mode'
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -41,12 +42,17 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  edgeSignals?: readonly EdgeSignal[]
+  showOperationalLabels?: boolean
+  cameraCommand?: { id: number; type: 'fit' | 'recenter' | 'zoom-in' | 'zoom-out' | 'reset' }
+  autoFitOnResize?: boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  edgeSignals = [], showOperationalLabels = false, cameraCommand, autoFitOnResize = false,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -57,11 +63,13 @@ export function AgentCanvas({
   const bloomRef = useRef<BloomRenderer | null>(null)
   const depthParticlesRef = useRef<DepthParticle[]>([])
   const lastFrameTimeRef = useRef(0)
+  const lastCameraCommandIdRef = useRef<number | undefined>(undefined)
   const dprRef = useRef(1)
 
   // Effects system
   const effectsRef = useRef<VisualEffect[]>([])
   const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
+  const reducedMotionRef = useRef(false)
   const prevToolStatesRef = useRef<Map<string, string>>(new Map())
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
@@ -81,9 +89,18 @@ export function AgentCanvas({
   const edgeLookupCacheRef = useRef<{
     particles: Particle[]
     edges: Edge[]
+    signals: readonly EdgeSignal[]
     activeEdgeIds: Set<string>
     edgeMap: Map<string, Edge>
-  }>({ particles: [], edges: [], activeEdgeIds: new Set(), edgeMap: new Map() })
+  }>({ particles: [], edges: [], signals: [], activeEdgeIds: new Set(), edgeMap: new Map() })
+
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const update = () => { reducedMotionRef.current = query.matches }
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
 
   // ─── Stable refs for animation loop & event handlers ────────────────────
   // Simulation data (agents, particles, etc.) is synced from simulationRef
@@ -93,7 +110,7 @@ export function AgentCanvas({
     agents: sim.agents, toolCalls: sim.toolCalls,
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-    showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+    showCostOverlay, selectedToolCallId, selectedDiscoveryId, edgeSignals, showOperationalLabels,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick,
@@ -105,11 +122,21 @@ export function AgentCanvas({
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
     transformRef, userHasNavigatedRef, panVelocityRef,
-    screenToCanvas, doZoomToFit, updateCamera,
+    screenToCanvas, doZoomToFit, zoomBy, recenter, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
-    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, reducedMotionRef, autoFitOnResize,
   })
+
+  useEffect(() => {
+    if (!cameraCommand || !shouldProcessCameraCommand(lastCameraCommandIdRef.current, cameraCommand.id)) return
+    lastCameraCommandIdRef.current = cameraCommand.id
+    if (cameraCommand.type === 'fit') doZoomToFit(true)
+    else if (cameraCommand.type === 'recenter') recenter(false, true)
+    else if (cameraCommand.type === 'zoom-in') zoomBy(1.2)
+    else if (cameraCommand.type === 'zoom-out') zoomBy(1 / 1.2)
+    else recenter(true, true)
+  }, [cameraCommand, doZoomToFit, recenter, zoomBy])
 
   // ─── Interaction ────────────────────────────────────────────────────────
   const {
@@ -191,13 +218,13 @@ export function AgentCanvas({
       const {
         agents, toolCalls, particles, edges, discoveries,
         selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-        showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+        showCostOverlay, selectedToolCallId, selectedDiscoveryId, edgeSignals, showOperationalLabels,
         simTime, pauseAutoFit, dimensions, onAgentDrag,
         isDragging,
       } = drawPropsRef.current
       const transform = transformRef.current
 
-      const deltaTime = lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
+      const deltaTime = reducedMotionRef.current ? 0 : lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
       lastFrameTimeRef.current = timestamp
       timeRef.current += deltaTime
       if (simTime != null) simTimeRef.current = simTime
@@ -219,7 +246,8 @@ export function AgentCanvas({
       updateDragLerp(agents, onAgentDrag)
 
       // Detect state changes → visual effects
-      detectStateChanges()
+      if (reducedMotionRef.current) effectsRef.current.length = 0
+      else detectStateChanges()
 
       // Update effects (mutate in place to avoid GC pressure)
       {
@@ -240,7 +268,7 @@ export function AgentCanvas({
 
       let activeAgentPos: { x: number; y: number; color: string } | undefined
       for (const [, agent] of agents) {
-        if (agent.state === 'thinking' || agent.state === 'tool_calling' || agent.state === 'waiting_permission') {
+        if (agent.state === 'thinking' || agent.state === 'tool_calling' || agent.state === 'waiting_permission' || agent.state === 'waiting') {
           activeAgentPos = { x: agent.x, y: agent.y, color: getStateColor(agent.state) }
           break
         }
@@ -256,23 +284,33 @@ export function AgentCanvas({
       const elCache = edgeLookupCacheRef.current
       let activeEdgeIds: Set<string>
       let edgeMap: Map<string, Edge>
-      if (elCache.particles === particles && elCache.edges === edges) {
+      if (elCache.particles === particles && elCache.edges === edges && elCache.signals === edgeSignals) {
         activeEdgeIds = elCache.activeEdgeIds
         edgeMap = elCache.edgeMap
       } else {
         activeEdgeIds = getActiveEdgeIds(particles)
+        for (const signal of edgeSignals) activeEdgeIds.add(signal.edgeId)
         edgeMap = buildEdgeMap(edges)
-        edgeLookupCacheRef.current = { particles, edges, activeEdgeIds, edgeMap }
+        edgeLookupCacheRef.current = { particles, edges, signals: edgeSignals, activeEdgeIds, edgeMap }
       }
 
       drawDiscoveryConnections(ctx, discoveries, agents)
       drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
       drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
       drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, showOperationalLabels)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
+      if (edgeSignals.length) {
+        const phase = (timeRef.current * 0.55) % 1
+        const signalParticles: Particle[] = edgeSignals.map((signal, index) => ({
+          id: `signal-${index}`, edgeId: signal.edgeId, progress: signal.direction === 'pulse' ? 0.5 : signal.direction === 'in' ? 1 - phase : phase,
+          type: signal.direction === 'in' ? 'return' : 'dispatch', color: signal.direction === 'in' ? '#66ffaa' : '#cc88ff',
+          size: 2.5, trailLength: signal.direction === 'pulse' ? 0 : 8, label: signal.label,
+        }))
+        drawParticles(ctx, signalParticles, edgeMap, agents, toolCalls, timeRef.current)
+      }
       drawEffects(ctx, effectsRef.current)
 
       if (selectedAgentId) {

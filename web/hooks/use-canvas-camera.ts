@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
-import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
+import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, CAMERA, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
 const AUTOFIT_AGENT_PADDING = 22
@@ -27,6 +27,8 @@ interface CameraOptions {
   agentCount: number
   zoomToFitTrigger?: number
   selectedAgentId: string | null
+  reducedMotionRef?: MutableRefObject<boolean>
+  autoFitOnResize?: boolean
 }
 
 export function useCanvasCamera({
@@ -37,6 +39,8 @@ export function useCanvasCamera({
   agentCount,
   zoomToFitTrigger,
   selectedAgentId,
+  reducedMotionRef,
+  autoFitOnResize,
 }: CameraOptions) {
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
@@ -50,8 +54,10 @@ export function useCanvasCamera({
     toolCalls: Map<string, ToolCallNode> | null
     discoveries: Discovery[] | null
     selectedAgentId: string | null
+    width: number
+    height: number
     result: Transform | null
-  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, result: null })
+  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, width: 0, height: 0, result: null })
 
   // Initialize transform centered on first agents
   useEffect(() => {
@@ -76,26 +82,29 @@ export function useCanvasCamera({
     return ids
   }, [])
 
-  const computeFitTransform = useCallback((): Transform | null => {
+  const computeFitTransform = useCallback((forceAll = false): Transform | null => {
     const { agents, toolCalls, discoveries, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
 
     // Return cached result if inputs haven't changed (reference equality —
     // React creates new Map/array objects on state updates, so same ref = same data)
     const cache = fitCacheRef.current
+    const fitSelectionId = forceAll ? null : selectedAgentId
     if (cache.agents === agents
       && cache.toolCalls === toolCalls
       && cache.discoveries === discoveries
-      && cache.selectedAgentId === selectedAgentId) {
+      && cache.selectedAgentId === fitSelectionId
+      && cache.width === dimensions.width
+      && cache.height === dimensions.height) {
       return cache.result
     }
 
     // Determine focus scope: if a non-main agent is selected, focus on it + descendants
     let focusScope: Set<string> | null = null
-    if (selectedAgentId) {
-      const selected = agents.get(selectedAgentId)
+    if (fitSelectionId) {
+      const selected = agents.get(fitSelectionId)
       if (selected && !selected.isMain) {
-        focusScope = getDescendantIds(agents, selectedAgentId)
+        focusScope = getDescendantIds(agents, fitSelectionId)
       }
     }
 
@@ -140,7 +149,7 @@ export function useCanvasCamera({
       }
     }
     if (minX === Infinity) {
-      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result: null }
+      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId: fitSelectionId, width: dimensions.width, height: dimensions.height, result: null }
       return null
     }
     const padding = ANIM.viewportPadding
@@ -154,19 +163,44 @@ export function useCanvasCamera({
       y: dimensions.height / 2 - centerY * scale,
       scale,
     }
-    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }
+    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId: fitSelectionId, width: dimensions.width, height: dimensions.height, result }
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef])
 
-  const doZoomToFit = useCallback(() => {
+  const doZoomToFit = useCallback((forceAll = false) => {
     userHasNavigatedRef.current = false
-    const target = computeFitTransform()
+    const target = computeFitTransform(forceAll)
     if (target) targetTransformRef.current = target
   }, [computeFitTransform])
+
+  const zoomBy = useCallback((factor: number) => {
+    const current = transformRef.current
+    const scale = Math.max(CAMERA.minZoom, Math.min(CAMERA.maxZoom, current.scale * factor))
+    const worldCenterX = (dimensions.width / 2 - current.x) / current.scale
+    const worldCenterY = (dimensions.height / 2 - current.y) / current.scale
+    transformRef.current = { x: dimensions.width / 2 - worldCenterX * scale, y: dimensions.height / 2 - worldCenterY * scale, scale }
+    targetTransformRef.current = null
+    userHasNavigatedRef.current = true
+  }, [dimensions])
+
+  const recenter = useCallback((resetScale = false, forceAll = false) => {
+    const fit = computeFitTransform(forceAll)
+    if (!fit) return
+    const scale = resetScale ? 1 : transformRef.current.scale
+    const worldCenterX = (dimensions.width / 2 - fit.x) / fit.scale
+    const worldCenterY = (dimensions.height / 2 - fit.y) / fit.scale
+    transformRef.current = { x: dimensions.width / 2 - worldCenterX * scale, y: dimensions.height / 2 - worldCenterY * scale, scale }
+    targetTransformRef.current = null
+    userHasNavigatedRef.current = true
+  }, [computeFitTransform, dimensions])
 
   useEffect(() => {
     if (zoomToFitTrigger && zoomToFitTrigger > 0) doZoomToFit()
   }, [zoomToFitTrigger, doZoomToFit])
+
+  useEffect(() => {
+    if (autoFitOnResize && agentCount > 0) doZoomToFit(true)
+  }, [agentCount, autoFitOnResize, dimensions.height, dimensions.width, doZoomToFit])
 
   // Re-engage auto-fit when selection changes
   useEffect(() => {
@@ -187,6 +221,15 @@ export function useCanvasCamera({
 
   /** Call from draw loop to update inertia and auto-fit lerp */
   const updateCamera = useCallback((isDragging: boolean, pauseAutoFit?: boolean) => {
+    if (reducedMotionRef?.current) {
+      panVelocityRef.current = { vx: 0, vy: 0, active: false }
+      const target = targetTransformRef.current
+      if (target) {
+        transformRef.current = target
+        targetTransformRef.current = null
+      }
+      return
+    }
     const transform = transformRef.current
 
     // Pan inertia
@@ -221,7 +264,7 @@ export function useCanvasCamera({
         transformRef.current = { x: nx, y: ny, scale: ns }
       }
     }
-  }, [computeFitTransform])
+  }, [computeFitTransform, reducedMotionRef])
 
   return {
     transformRef,
@@ -229,6 +272,8 @@ export function useCanvasCamera({
     panVelocityRef,
     screenToCanvas,
     doZoomToFit,
+    zoomBy,
+    recenter,
     updateCamera,
   }
 }

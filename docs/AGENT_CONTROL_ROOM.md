@@ -19,6 +19,14 @@ Workflow identity, agent names, assignments, delegation, and dependencies are au
 
 Session inactivity, assignment completion, workflow completion, and process termination are separate signals.
 
+## Live interaction canvas
+
+The workflow overview renders authoritative agents as independent animated nodes on the existing Agent Flow canvas, bounded to 100 visible nodes for predictable performance. When that limit is reached, the canvas reports the displayed and registered totals; recorded relationship metadata preserves authoritative context for parents or children outside the visible bound. Only explicit delegation records create persistent parent-child connectors. Short-lived edge signals represent authoritative delegation, assignment, wait, resume, return, completion, and failure events; lifecycle data is never presented as fabricated dialogue.
+
+Selecting a node keeps the complete topology visible and opens a bounded detail drawer with the selected agent's safe identity, relationship, assignment, status, context, and recent summarized activity. Unavailable chat, files, names, roles, assignments, or relationships remain explicitly unavailable or neutral.
+
+**Fullscreen canvas** uses an application-level full-viewport dialog, so it works without browser fullscreen permission. It traps keyboard focus, exits with Escape or the visible control, restores the previous dashboard scroll position, and provides fit, recenter, zoom, and reset controls. Resize refits the authoritative topology; reduced-motion preferences disable canvas motion and camera inertia. Assignments, the combined timeline, and session cards remain reachable from the fullscreen secondary-panel control.
+
 ## Privacy, retention, and cleanup
 
 Agent Flow reads local Claude/Codex session files and `.agent-flow/orchestration.jsonl` (or `AGENT_FLOW_ORCHESTRATION_LOG`). The control room displays session IDs, runtime/model, workspace, context totals, summarized local activity, and accepted orchestration safe fields.
@@ -71,6 +79,7 @@ Use `pnpm.cmd run dev:demo` for mock data. macOS/Linux users can use the same sc
 6. Open the correct detailed session, return to Overview, and confirm buffered events remain.
 7. Check wide, medium, and narrow layouts, long labels/paths, visible keyboard focus, semantic labels, reduced motion, and status text independent of color.
 8. Inspect the browser console, SSE connection, relay output, and extension/web logs. Browser QA is a manual release gate when rendering tools are unavailable.
+9. Enter Fullscreen canvas, exercise fit/recenter/zoom/pan and agent selection, resize at wide and narrow widths, then exit with Escape and the visible control; confirm focus and dashboard scroll position are restored.
 
 ## Contributing and limitations
 
