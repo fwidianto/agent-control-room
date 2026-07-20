@@ -11,6 +11,7 @@ import {
   type WorkflowTimelineItem,
 } from '@/lib/workflow-control-room'
 import { WorkflowTopologyCanvas } from './workflow-topology-canvas'
+import type { RuntimeActivityEvent } from '@/lib/runtime-activity'
 
 const focus = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300'
 const noActivity: SessionActivityEvent[] = []
@@ -32,8 +33,8 @@ function SessionCard({ session, onOpen, now }: { session: SessionSummary; onOpen
     <article className="rounded-lg p-4 min-w-0" style={{ background: COLORS.holoBg03, border: `1px solid ${COLORS.holoBorder06}` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate text-sm" title={session.label} style={{ color: COLORS.holoBright }}>{session.label}</h3>
-          <p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>{shortSessionId(session.id)}</p>
+          <h3 className="truncate text-sm" style={{ color: COLORS.holoBright }}>{session.runtime ? `${session.runtime[0].toUpperCase()}${session.runtime.slice(1)} session` : 'Agent session'}</h3>
+          <p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>Session identity hidden</p>
         </div>
         <span className="rounded px-2 py-1 text-[10px]" aria-label={status} style={{ color: status === 'Inactive' ? COLORS.textMuted : COLORS.complete, border: `1px solid ${COLORS.toggleBorder}` }}>{status}</span>
       </div>
@@ -44,7 +45,7 @@ function SessionCard({ session, onOpen, now }: { session: SessionSummary; onOpen
         <dt style={{ color: COLORS.textMuted }}>Elapsed</dt><dd style={{ color: COLORS.holoBright }}>{elapsed(seconds)}</dd>
         <dt style={{ color: COLORS.textMuted }}>Activity</dt><dd className="break-words" style={{ color: COLORS.holoBright }}>{session.activity ?? 'No activity reported'}</dd>
         <dt style={{ color: COLORS.textMuted }}>Context</dt><dd style={{ color: COLORS.holoBright }}>{session.tokens === undefined ? 'Unavailable' : `${formatTokens(session.tokens)}${percent === undefined ? '' : ` (${percent}%)`}`}</dd>
-        <dt style={{ color: COLORS.textMuted }}>Workspace</dt><dd className="truncate" title={session.workspace} style={{ color: COLORS.holoBright }}>{session.workspace ?? 'Unavailable'}</dd>
+        <dt style={{ color: COLORS.textMuted }}>Workspace</dt><dd className="truncate" style={{ color: COLORS.holoBright }}>{session.workspace ? 'Workspace configured' : 'Unavailable'}</dd>
         <dt style={{ color: COLORS.textMuted }}>Workflow</dt><dd className="break-words" style={{ color: COLORS.holoBright }}>{session.workflowMetadataStatus === 'invalid' ? 'Invalid metadata' : session.workflowMetadataStatus === 'expired' ? 'Expired metadata' : session.workflow ? session.workflow.workflowName : 'Unavailable'}</dd>
       </dl>
       <button type="button" onClick={() => onOpen(session.id)} className={`mt-4 w-full rounded px-3 py-2 text-xs ${focus}`} style={{ color: COLORS.holoBright, background: COLORS.toggleActive, border: `1px solid ${COLORS.toggleBorder}` }}>Open details</button>
@@ -86,8 +87,8 @@ function WorkflowTimeline({ items, onOpen }: { items: WorkflowTimelineItem[]; on
   </div>
 }
 
-function WorkflowSection({ workflowId, workflowName, sessions, state, activity, onOpen, now, index }: {
-  workflowId: string; workflowName: string; sessions: SessionSummary[]; state: OrchestrationState; activity: SessionActivityEvent[]; onOpen: (id: string) => void; now: number; index: number
+function WorkflowSection({ workflowId, workflowName, sessions, state, activity, runtimeActivity, onOpen, now, index }: {
+  workflowId: string; workflowName: string; sessions: SessionSummary[]; state: OrchestrationState; activity: SessionActivityEvent[]; runtimeActivity: RuntimeActivityEvent[]; onOpen: (id: string) => void; now: number; index: number
 }) {
   const metrics = useMemo(() => workflowMetrics(workflowId, state, sessions, now), [workflowId, state, sessions, now])
   const timeline = useMemo(() => buildWorkflowTimeline(workflowId, state, activity), [workflowId, state, activity])
@@ -97,7 +98,7 @@ function WorkflowSection({ workflowId, workflowName, sessions, state, activity, 
     <header className="min-w-0"><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 id={`workflow-${index}`} className="truncate text-sm" title={workflowName} style={{ color: COLORS.holoBright }}>Workflow: {workflowName}</h2><p className="mt-1 truncate text-[10px]" title={workflowId} style={{ color: COLORS.textMuted }}>{workflowId}</p></div><span className="rounded px-2 py-1 text-[10px]" style={{ color: COLORS.holoBright, border: `1px solid ${COLORS.toggleBorder}` }}>{metrics.status}</span></div>
       <p className="mt-2 text-[10px]" style={{ color: COLORS.textMuted }}>Source: {identity?.workflowSource ?? state.workflows.get(workflowId)?.source ?? 'Unavailable'} · {identity?.provenance ?? 'Explicit orchestration event'}</p>
     </header>
-    <section className="mt-5" aria-labelledby={`agents-${index}`}><h3 id={`agents-${index}`} className="mb-3 text-xs" style={{ color: COLORS.holoBright }}>Live interaction canvas</h3><WorkflowTopologyCanvas workflowId={workflowId} state={state} sessions={sessions} activity={activity} now={now} onOpen={onOpen} secondaryPanelIds={{ assignments: `assignments-${index}`, timeline: `timeline-${index}`, sessions: `sessions-${index}` }} /></section>
+    <section className="mt-5" aria-labelledby={`agents-${index}`}><h3 id={`agents-${index}`} className="mb-3 text-xs" style={{ color: COLORS.holoBright }}>Live interaction canvas</h3><WorkflowTopologyCanvas workflowId={workflowId} state={state} sessions={sessions} activity={activity} runtimeActivity={runtimeActivity} now={now} onOpen={onOpen} secondaryPanelIds={{ assignments: `assignments-${index}`, timeline: `timeline-${index}`, sessions: `sessions-${index}` }} /></section>
     <details className="mt-5 rounded-lg p-3" style={{ border: `1px solid ${COLORS.holoBorder10}` }}><summary className={`cursor-pointer text-xs ${focus}`} style={{ color: COLORS.holoBright }}>Workflow metrics</summary><dl className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
       {([['Elapsed', elapsed(metrics.elapsedSeconds)], ['Sessions', metrics.sessionCount], ['Agents', metrics.agentCount], ['Context', metrics.tokens === undefined ? 'Unavailable' : formatTokens(metrics.tokens)], ['Assignments', `${metrics.completedAssignments}/${metrics.assignmentCount} completed`], ['Agent states', formatCounts(metrics.counts.agents)], ['Assignment states', formatCounts(metrics.counts.assignments)], ['Session states', formatCounts(metrics.counts.sessions)]] as const).map(([label, value]) => <div key={label} className="min-w-0 rounded p-2" style={{ background: COLORS.holoBg05 }}><dt style={{ color: COLORS.textMuted }}>{label}</dt><dd className="mt-1 break-words" style={{ color: COLORS.holoBright }}>{value}</dd></div>)}
     </dl></details>
@@ -107,7 +108,7 @@ function WorkflowSection({ workflowId, workflowName, sessions, state, activity, 
   </section>
 }
 
-export function ControlRoom({ sessions, orchestrationState, sessionActivity, onOpen }: { sessions: SessionSummary[]; orchestrationState: OrchestrationState; sessionActivity: SessionActivityEvent[]; onOpen: (id: string) => void }) {
+export function ControlRoom({ sessions, orchestrationState, sessionActivity, runtimeActivity, onOpen }: { sessions: SessionSummary[]; orchestrationState: OrchestrationState; sessionActivity: SessionActivityEvent[]; runtimeActivity: RuntimeActivityEvent[]; onOpen: (id: string) => void }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const grouped = useMemo(() => groupSessionsByWorkflow(sessions), [sessions])
@@ -123,7 +124,7 @@ export function ControlRoom({ sessions, orchestrationState, sessionActivity, onO
   }, [orchestrationState.memberships, sessionActivity, sessions])
   return <main className="absolute inset-0 z-20 overflow-auto p-4 sm:p-8 font-mono" style={{ background: COLORS.void }}>
     <header className="mb-6"><h1 className="text-lg" style={{ color: COLORS.holoBright }}>Workspace control room</h1><p className="mt-1 text-xs" style={{ color: COLORS.textMuted }}>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} · {sessions.length} detected session{sessions.length === 1 ? '' : 's'}</p></header>
-    <div className="space-y-8">{workflows.map((workflow, index) => <WorkflowSection key={workflow.workflowId} workflowId={workflow.workflowId} workflowName={workflow.workflowName} sessions={workflow.sessions} state={orchestrationState} activity={activityByWorkflow.get(workflow.workflowId) ?? noActivity} onOpen={onOpen} now={now} index={index} />)}
+    <div className="space-y-8">{workflows.map((workflow, index) => <WorkflowSection key={workflow.workflowId} workflowId={workflow.workflowId} workflowName={workflow.workflowName} sessions={workflow.sessions} state={orchestrationState} activity={activityByWorkflow.get(workflow.workflowId) ?? noActivity} runtimeActivity={runtimeActivity} onOpen={onOpen} now={now} index={index} />)}
       {grouped.ungrouped.length ? <section aria-labelledby="ungrouped-sessions"><header className="mb-3"><h2 id="ungrouped-sessions" className="text-sm" style={{ color: COLORS.holoBright }}>Ungrouped Sessions</h2><p className="mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>Missing, invalid, or expired workflow metadata is not grouped</p></header><SessionGrid sessions={grouped.ungrouped} onOpen={onOpen} now={now} /></section> : null}
     </div>
   </main>

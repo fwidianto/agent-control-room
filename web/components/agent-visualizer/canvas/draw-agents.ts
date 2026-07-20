@@ -4,6 +4,7 @@ import {
   AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY,
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
+import { runtimeIcon } from '@/lib/runtime-icon'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 
@@ -46,14 +47,35 @@ export function drawOpenAILogo(ctx: CanvasRenderingContext2D, cx: number, cy: nu
   ctx.restore()
 }
 
-/** Pick the brand logo for the agent's runtime. Defaults to Claude. */
+function drawNeutralBrand(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, color: string) {
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(1, r * 0.08)
+  ctx.beginPath()
+  ctx.arc(cx - r * 0.22, cy, r * 0.08, 0, Math.PI * 2)
+  ctx.arc(cx, cy, r * 0.08, 0, Math.PI * 2)
+  ctx.arc(cx + r * 0.22, cy, r * 0.08, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - r * 0.34)
+  ctx.lineTo(cx + r * 0.34, cy)
+  ctx.lineTo(cx, cy + r * 0.34)
+  ctx.lineTo(cx - r * 0.34, cy)
+  ctx.closePath()
+  ctx.stroke()
+  ctx.restore()
+}
+
 export function drawAgentBrand(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number, r: number, color: string,
   runtime: Agent['runtime'],
 ) {
-  if (runtime === 'codex') drawOpenAILogo(ctx, cx, cy, r, color)
-  else drawClaudeSpark(ctx, cx, cy, r, color)
+  const icon = runtimeIcon(runtime)
+  if (icon === 'codex') drawOpenAILogo(ctx, cx, cy, r, color)
+  else if (icon === 'claude') drawClaudeSpark(ctx, cx, cy, r, color)
+  else drawNeutralBrand(ctx, cx, cy, r, color)
 }
 
 export function drawContextComposition(
@@ -260,14 +282,8 @@ function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
     ctx.fillStyle = color + '90'
     ctx.fillRect(agent.x - r * 0.16, agent.y - r * 0.25, r * 0.1, r * 0.5)
     ctx.fillRect(agent.x + r * 0.06, agent.y - r * 0.25, r * 0.1, r * 0.5)
-  } else if (agent.isMain) {
-    drawAgentBrand(ctx, agent.x, agent.y, r, color + '90', agent.runtime)
   } else {
-    ctx.fillStyle = color + '90'
-    ctx.font = `${r * AGENT_DRAW.subIconScale}px monospace`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(agent.state === 'tool_calling' ? '\u2699' : '\u25C7', agent.x, agent.y)
+    drawAgentBrand(ctx, agent.x, agent.y, agent.isMain ? r : r * 0.78, color + '90', agent.runtime)
   }
 }
 
