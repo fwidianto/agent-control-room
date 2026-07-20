@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks'
 import { reduceOrchestrationSnapshot } from '../web/lib/orchestration-state'
 import type { OrchestrationEvent, WorkflowIdentity } from '../web/lib/bridge-types'
 import type { SessionSummary } from '../web/lib/session-summary'
+import type { RuntimeActivityEvent } from '../web/lib/runtime-activity'
 import { isCanvasClickGesture } from '../web/lib/interaction-gesture'
 import { installFullscreenMode, shouldProcessCameraCommand } from '../web/lib/fullscreen-mode'
 import {
@@ -210,6 +211,40 @@ test('builds a bounded canvas model from explicit agents, sessions, and delegati
   assert.deepEqual(model.signals, [{ edgeId: 'edge-root-luna', direction: 'in', label: 'Returned', timestamp: Date.parse('2026-07-17T00:00:02.000Z') }])
 })
 
+test('shows concurrent evidence only for authoritatively mapped agents and sanitizes names', () => {
+  const state = reduceOrchestrationSnapshot([
+    event('workflow_session_registered', { sessionId: 'root-session', runtime: 'codex' }),
+    event('workflow_session_registered', { sessionId: 'luna-session', runtime: 'claude' }),
+    event('workflow_session_registered', { workflowId: 'workflow-2', sessionId: 'other-session', runtime: 'codex' }),
+    event('agent_registered', { agentId: 'root', agentName: 'C:\\private\\Sol', sessionId: 'root-session' }),
+    event('agent_registered', { agentId: 'luna', agentName: '/private/Luna', sessionId: 'luna-session' }),
+    event('agent_registered', { workflowId: 'workflow-2', agentId: 'other', agentName: 'Other', sessionId: 'other-session' }),
+  ])
+  const activity = (id: string, workflowId: string, sessionId: string, agentId: string, artifactType: RuntimeActivityEvent['artifactType'], operation: RuntimeActivityEvent['operation'], label: string): RuntimeActivityEvent => ({
+    id, runtime: artifactType === 'file' ? 'claude' : 'codex', workflowId, sessionId, agentId, timestamp: Date.parse('2026-07-17T00:00:01.000Z'),
+    callId: id, operation, artifactType, artifactId: `${sessionId}:${id}`, label, phase: 'start', status: 'running',
+    evidenceSource: artifactType === 'file' ? 'claude-runtime' : 'codex-rollout', authority: 'observed', confidence: 'high',
+  })
+  const model = buildWorkflowCanvasModel('workflow-1', state, [
+    { ...session('root-session', workflow()), runtime: 'codex' },
+    { ...session('luna-session', workflow()), runtime: 'claude' },
+    { ...session('other-session', workflow('workflow-2')), runtime: 'codex' },
+  ], [], [
+    activity('read-one', 'workflow-1', 'root-session', 'root', 'file', 'read', 'Reading · src/one.ts'),
+    activity('command-two', 'workflow-1', 'luna-session', 'luna', 'command', 'execute', 'Running · pnpm test'),
+    activity('return-one', 'workflow-1', 'luna-session', 'luna', 'result', 'return', 'Returning control · outcome unavailable'),
+    activity('leak', 'workflow-2', 'other-session', 'other', 'command', 'execute', 'Running · private command'),
+  ])
+
+  assert.equal(model.agents.get('root')?.name.startsWith('Sol'), true)
+  assert.equal(model.agents.get('luna')?.name.startsWith('Luna'), true)
+  assert.equal(model.discoveries.length, 2)
+  assert.equal(model.discoveries.some(discovery => discovery.label.startsWith('Returning control')), true)
+  assert.equal(model.toolCalls.size, 1)
+  assert.equal(model.toolCalls.has('leak'), false)
+  assert.equal(model.edges.some(edge => edge.id === 'artifact-edge-leak'), false)
+})
+
 test('does not fabricate missing context or elapsed telemetry', () => {
   const state = reduceOrchestrationSnapshot([
     event('agent_registered', { agentId: 'no-session' }),
@@ -343,7 +378,9 @@ test('control room source preserves semantic labels, keyboard focus, reduced DOM
   const source = readFileSync(new URL('../web/components/agent-visualizer/control-room.tsx', import.meta.url), 'utf8')
   for (const marker of ['Live interaction canvas', '<fieldset>', '<legend', 'focus-visible:', 'Open details', 'onOpen(item.sessionId!)', 'CONTROL_ROOM_RENDER_LIMIT', 'No sessions explicitly registered.']) assert.ok(source.includes(marker), `missing ${marker}`)
   const topologySource = readFileSync(new URL('../web/components/agent-visualizer/workflow-topology-canvas.tsx', import.meta.url), 'utf8')
-  for (const marker of ['Animated live agent interaction canvas', '<AgentCanvas', 'edgeSignals={model.signals}', 'showOperationalLabels', 'selectedAgentId={selectedAgentId}', 'Close details', 'Recent commands and tools', 'privacy-safe lifecycle data', 'Fullscreen canvas', 'Fullscreen interaction mode', 'Exit fullscreen', "event.key === 'Escape'", 'installFullscreenMode', 'aria-modal={fullscreen || undefined}', 'Secondary panels', 'cameraCommand={cameraCommand}']) assert.ok(topologySource.includes(marker), `missing ${marker}`)
+  for (const marker of ['Animated live agent interaction canvas', '<AgentCanvas', 'edgeSignals={model.signals}', 'showOperationalLabels', 'selectedAgentId={selectedAgentId}', 'Close details', 'Recent commands and tools', 'privacy-safe lifecycle data', 'Fullscreen canvas', 'Fullscreen interaction mode', 'Exit fullscreen', 'Showcase', 'Live · privacy mode', 'Replay · privacy mode', 'Legend: agents', 'Pause', 'Resume', 'Restart replay', 'Replay speed', "event.key === 'Escape'", 'installFullscreenMode', 'aria-modal={fullscreen || undefined}', 'Secondary panels', 'cameraCommand={cameraCommand}']) assert.ok(topologySource.includes(marker), `missing ${marker}`)
+  const canvasSource = readFileSync(new URL('../web/components/agent-visualizer/canvas.tsx', import.meta.url), 'utf8')
+  assert.ok(canvasSource.includes("prefers-reduced-motion: reduce"))
   const cameraSource = readFileSync(new URL('../web/hooks/use-canvas-camera.ts', import.meta.url), 'utf8')
   for (const marker of ['const zoomBy', 'const recenter', 'forceAll', 'CAMERA.minZoom', 'CAMERA.maxZoom']) assert.ok(cameraSource.includes(marker), `missing camera behavior ${marker}`)
   assert.doesNotMatch(source, /AgentVisualizer/)

@@ -81,6 +81,12 @@ test('parses every explicit agent status and rejects malformed status updates', 
   ]) assert.equal(parseOrchestrationEvent(base('agent_status_updated', malformed)), null)
 })
 
+test('preserves authoritative agent lifecycle session identity for activity association', () => {
+  const parsed = parseOrchestrationEvent(base('agent_returned', { agentId: 'agent-1', sessionId: 'session-1' }))
+  assert.equal(parsed?.type, 'agent_returned')
+  assert.equal(parsed?.sessionId, 'session-1')
+})
+
 test('reader replays and tails one bounded idempotent orchestration stream', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-flow-orchestration-'))
   const file = join(dir, 'orchestration.jsonl')

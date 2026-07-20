@@ -99,6 +99,9 @@ describe('CodexRolloutParser', () => {
     const ends = events.filter(e => e.type === 'tool_call_end' && e.payload.tool === 'exec_command')
     assert.equal(starts.length, 1)
     assert.equal(ends.length, 1)
+    assert.equal(starts[0].payload.callId, 'call-exec-1')
+    assert.equal(ends[0].payload.callId, 'call-exec-1')
+    assert.equal(ends[0].payload.exitCode, 0)
     assert.ok(!state.pendingToolCalls.has('call-exec-1'), 'pending should be cleared on output')
   })
 
@@ -116,6 +119,8 @@ describe('CodexRolloutParser', () => {
     const ends = events.filter(e => e.type === 'tool_call_end' && e.payload.tool === 'apply_patch')
     assert.equal(starts.length, 1)
     assert.equal(ends.length, 1)
+    assert.equal(starts[0].payload.callId, 'call-patch-1')
+    assert.equal(ends[0].payload.callId, 'call-patch-1')
     assert.ok(!state.pendingToolCalls.has('call-patch-1'))
   })
 
@@ -249,6 +254,29 @@ describe('CodexRolloutParser', () => {
     assert.equal(ends.length, 0)
     assert.equal(state.pendingToolCalls.size, 1)
     assert.ok(state.pendingToolCalls.has('orphan-1'))
+  })
+
+  it('normalizes native command completion metadata without retaining output', () => {
+    const events: AgentEvent[] = []
+    const parser = new CodexRolloutParser({ emit: (e) => events.push(e), elapsed: () => 0 })
+    const state = createCodexRolloutState()
+    parser.processLine(JSON.stringify({ type: 'session_meta', payload: { id: 's1', cwd: '/tmp/x' } }), state)
+    parser.processLine(JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'exec_command', arguments: '{"cmd":"pnpm test"}', call_id: 'native-1' },
+    }), state)
+    parser.processLine(JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'exec_command_end', call_id: 'native-1', exit_code: 7, success: false, stdout: 'private output' },
+    }), state)
+
+    const end = events.find(event => event.type === 'tool_call_end' && event.payload.callId === 'native-1')
+    assert.ok(end)
+    assert.equal(end!.payload.exitCode, 7)
+    assert.equal(end!.payload.isError, true)
+    assert.equal(end!.payload.result, 'Command operation completed')
+    assert.equal(end!.payload.stdout, undefined)
+    assert.equal(state.pendingToolCalls.has('native-1'), false)
   })
 
   it('resets breakdown deterministically across an oversized compaction', () => {

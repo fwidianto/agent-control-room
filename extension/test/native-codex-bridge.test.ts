@@ -7,6 +7,8 @@ import { WorkflowIdentityReader, enrichSessionList } from '../src/workflow-ident
 
 const rootId = '019f7a48-16d8-7722-9fd6-ea6ebf1c084d'
 const childId = '019f7a49-2bf6-73b2-bc5f-216d5710a371'
+const foreignRootId = '019f7a4a-3c07-7a4d-9d44-6f8b5ce1d2aa'
+const grandchildId = '019f7a4b-4d18-7b5e-ae55-7f9c6de2e3bb'
 const line = (timestamp: string, type: string, payload: Record<string, unknown>) => JSON.stringify({ timestamp, type, payload })
 
 function fixture(): NativeCodexBridge {
@@ -47,7 +49,7 @@ test('normalizes explicit native relationships and only authoritative lifecycle 
   assert.ok(events.some(event => event.type === 'delegation_created' && event.agentId === childId && event.parentAgentId === rootId))
   assert.ok(events.some(event => event.type === 'assignment_created' && event.assignmentId === 'spawn-call' && event.assignmentTitle === '/root/luna'))
   assert.ok(childEvents.some(event => event.type === 'agent_status_updated' && event.status === 'active'))
-  assert.ok(childEvents.some(event => event.type === 'agent_returned'))
+  assert.ok(childEvents.some(event => event.type === 'agent_returned' && event.sessionId === childId))
   assert.ok(childEvents.some(event => event.type === 'agent_resumed'))
   assert.ok(childEvents.some(event => event.type === 'agent_status_updated' && event.status === 'completed'))
   assert.ok(events.some(event => event.type === 'agent_waiting' && event.agentId === rootId))
@@ -91,6 +93,14 @@ test('rejects mismatched relationship metadata and wrong-recipient lifecycle han
     line('2026-07-19T12:00:03.000Z', 'event_msg', { type: 'task_complete', turn_id: 'not-luna' }),
   ])
   assert.equal(bridge.getEvents().some(event => ['agent_returned', 'agent_resumed', 'agent_status_updated'].includes(event.type)), false)
+
+  const unrelatedParent = new NativeCodexBridge()
+  unrelatedParent.processLines(childId, [line('2026-07-19T12:00:00.000Z', 'session_meta', {
+    id: childId, session_id: rootId, parent_thread_id: foreignRootId, forked_from_id: foreignRootId,
+    thread_source: 'subagent', agent_path: '/foreign/luna',
+    source: { subagent: { thread_spawn: { parent_thread_id: foreignRootId, agent_path: '/foreign/luna' } } },
+  })])
+  assert.equal(unrelatedParent.getEvents().length, 0)
 })
 
 test('bounds mixed retained native records deterministically', () => {
@@ -107,6 +117,24 @@ test('bounds mixed retained native records deterministically', () => {
   bridge.processLines(childId, lines)
   const retained = bridge.getEvents().filter(event => event.eventId.includes(':turn:bounded-') || event.eventId.includes(':wait:bounded-wait-'))
   assert.ok(retained.length <= 512)
+})
+
+test('revalidates nested child metadata when the parent arrives later', () => {
+  const bridge = new NativeCodexBridge()
+  bridge.processLines(rootId, [line('2026-07-19T12:00:00.000Z', 'session_meta', { id: rootId, session_id: rootId, thread_source: 'user' })])
+  bridge.processLines(grandchildId, [line('2026-07-19T12:00:02.000Z', 'session_meta', {
+    id: grandchildId, session_id: rootId, parent_thread_id: childId, forked_from_id: childId,
+    thread_source: 'subagent', agent_path: '/root/luna/terra',
+    source: { subagent: { thread_spawn: { parent_thread_id: childId, agent_path: '/root/luna/terra' } } },
+  })])
+  assert.equal(bridge.getEvents().some(event => 'agentId' in event && event.agentId === grandchildId), false)
+  bridge.processLines(childId, [line('2026-07-19T12:00:01.000Z', 'session_meta', {
+    id: childId, session_id: rootId, parent_thread_id: rootId, forked_from_id: rootId,
+    thread_source: 'subagent', agent_path: '/root/luna',
+    source: { subagent: { thread_spawn: { parent_thread_id: rootId, agent_path: '/root/luna' } } },
+  })])
+  assert.ok(bridge.getEvents().some(event => event.type === 'agent_registered' && event.agentId === grandchildId))
+  assert.ok(bridge.getEvents().some(event => event.type === 'delegation_created' && event.agentId === grandchildId && event.parentAgentId === childId))
 })
 
 test('supplemental native events group real Codex sessions without a manual sidecar', () => {
