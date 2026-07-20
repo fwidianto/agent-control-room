@@ -6,6 +6,10 @@ import { SimulationEvent } from '@/lib/agent-types'
 import { mergeSessionList, summarizeSessionEvents, updateSessionSummary, type SessionSummary } from '@/lib/session-summary'
 import { createOrchestrationState, reduceOrchestrationEvent, reduceOrchestrationSnapshot, type OrchestrationState } from '@/lib/orchestration-state'
 import { appendSessionActivity, appendSessionLifecycle, type SessionActivityEvent } from '@/lib/workflow-control-room'
+import {
+  createRuntimeActivityState, normalizeAgentEvent, normalizeReturnActivity, reduceRuntimeActivity, runtimeActivityList,
+  type RuntimeActivityEvent,
+} from '@/lib/runtime-activity'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -40,6 +44,8 @@ interface BridgeHookResult {
   orchestrationState: OrchestrationState
   /** Bounded, display-safe session activity for the workflow timeline. */
   sessionActivity: SessionActivityEvent[]
+  /** Bounded, privacy-safe observed runtime activity for workflow canvases. */
+  runtimeActivity: RuntimeActivityEvent[]
 }
 
 /**
@@ -71,7 +77,9 @@ export function useVSCodeBridge(): BridgeHookResult {
   const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
   const [orchestrationState, setOrchestrationState] = useState(createOrchestrationState)
   const [sessionActivity, setSessionActivity] = useState<SessionActivityEvent[]>([])
+  const [runtimeActivity, setRuntimeActivity] = useState(createRuntimeActivityState)
   const sessionStartsRef = useRef<Map<string, number>>(new Map())
+  const sessionMetaRef = useRef<Map<string, SessionInfo>>(new Map())
 
   // Connect to standalone dev relay server via SSE when not in VS Code
   useEffect(() => {
@@ -139,6 +147,8 @@ export function useVSCodeBridge(): BridgeHookResult {
         const start = sessionStartsRef.current.get(event.sessionId)
         setSessionActivity(current => appendSessionActivity(current, event, event.sessionId!,
           start === undefined ? Date.now() : start + event.time * 1000))
+        const activity = normalizeAgentEvent(event, sessionMetaRef.current.get(event.sessionId))
+        if (activity) setRuntimeActivity(current => reduceRuntimeActivity(current, activity))
       }
 
       // Deliver to pending if session matches (ref is always current).
@@ -183,6 +193,8 @@ export function useVSCodeBridge(): BridgeHookResult {
     const unsubOrchestration = bridge.onOrchestration((type, events) => {
       setOrchestrationState(current => type === 'snapshot' ? reduceOrchestrationSnapshot(events)
         : events.reduce(reduceOrchestrationEvent, current))
+      const returns = events.map(normalizeReturnActivity).filter((event): event is RuntimeActivityEvent => event !== null)
+      if (returns.length) setRuntimeActivity(current => returns.reduce(reduceRuntimeActivity, current))
     })
 
     // Session lifecycle tracking
@@ -201,13 +213,18 @@ export function useVSCodeBridge(): BridgeHookResult {
         dismissedSessionsRef.current.clear()
         setOrchestrationState(createOrchestrationState())
         setSessionActivity([])
+        setRuntimeActivity(createRuntimeActivityState())
         sessionStartsRef.current.clear()
+        sessionMetaRef.current.clear()
         setEventVersion(v => v + 1)
         return
       }
       if (type === 'list') {
         const sessionList = data as SessionSummary[]
-        for (const session of sessionList) sessionStartsRef.current.set(session.id, session.startTime)
+        for (const session of sessionList) {
+          sessionStartsRef.current.set(session.id, session.startTime)
+          sessionMetaRef.current.set(session.id, session)
+        }
         setSessions(prev => mergeSessionList(prev, sessionList))
         // Auto-select: prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
@@ -227,6 +244,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       } else if (type === 'started') {
         const session = data as SessionInfo
         sessionStartsRef.current.set(session.id, session.startTime)
+        sessionMetaRef.current.set(session.id, session)
         setSessionActivity(current => appendSessionLifecycle(current, session.id, session.startTime, 'session_started'))
         setSessions(prev => {
           const existing = prev.find(s => s.id === session.id)
@@ -345,5 +363,6 @@ export function useVSCodeBridge(): BridgeHookResult {
     removeSession,
     orchestrationState,
     sessionActivity,
+    runtimeActivity: runtimeActivityList(runtimeActivity),
   }
 }

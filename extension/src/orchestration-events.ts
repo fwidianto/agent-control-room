@@ -210,7 +210,7 @@ export function parseOrchestrationEvent(value: unknown, now = Date.now()): Orche
     case 'agent_resumed':
     case 'agent_returned':
       if (!agentId) return null
-      return { ...common, type: common.type, agentId, ...(assignmentId ? { assignmentId } : {}), ...(reason ? { reason } : {}) }
+      return { ...common, type: common.type, agentId, ...(sessionId ? { sessionId } : {}), ...(assignmentId ? { assignmentId } : {}), ...(reason ? { reason } : {}) }
     case 'assignment_created': {
       const assignmentTitle = optionalText('assignmentTitle')
       if (!assignmentId || !assignmentTitle) return null

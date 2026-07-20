@@ -36,6 +36,14 @@ interface NativeStatusObservation {
   timestamp: string
 }
 
+interface PendingRelationship {
+  parentId: string
+  rootId: string
+  agentPath: string
+  nickname?: string
+  agentRole?: string
+}
+
 interface NativeThread {
   id: string
   createdAt?: string
@@ -53,6 +61,7 @@ interface NativeThread {
   waits: Map<string, { startedAt: string; resumedAt?: string }>
   statuses: Map<string, NativeStatusObservation>
   retainedRecords: Set<string>
+  pendingRelationship?: PendingRelationship
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -76,6 +85,15 @@ function event(value: Record<string, unknown>): OrchestrationEvent | null {
 
 function label(thread: NativeThread | undefined, id: string): string {
   return thread?.agentPath ?? thread?.nickname ?? `Codex ${id.slice(0, 8)}`
+}
+
+function applyRelationship(thread: NativeThread, relationship: PendingRelationship): void {
+  thread.parentId = relationship.parentId
+  thread.rootId = relationship.rootId
+  thread.agentPath = relationship.agentPath
+  thread.nickname = relationship.nickname
+  thread.agentRole = relationship.agentRole
+  thread.pendingRelationship = undefined
 }
 
 /** Normalizes only structured native multi-agent metadata from rollout lines. */
@@ -132,16 +150,18 @@ export class NativeCodexBridge {
         if (!parentId || !rootId || !agentPath || !THREAD_ID.test(parentId) || !THREAD_ID.test(rootId)
           || forkedFromId !== parentId || spawn?.parent_thread_id !== parentId || spawn.agent_path !== agentPath
           || nickname !== safeText(spawn.agent_nickname) || agentRole !== safeText(spawn.agent_role)) return
-        thread.parentId = parentId
-        thread.rootId = rootId
-        thread.agentPath = agentPath
-        thread.nickname = nickname
-        thread.agentRole = agentRole
+        const relationship = { parentId, rootId, agentPath, ...(nickname ? { nickname } : {}), ...(agentRole ? { agentRole } : {}) }
+        const parentThread = this.threads.get(parentId)
+        if (parentId !== rootId && parentThread?.rootId && parentThread.rootId !== rootId) return
+        if (parentId !== rootId && !parentThread?.rootId) thread.pendingRelationship = relationship
+        else applyRelationship(thread, relationship)
         this.revision++
+        this.resolvePendingRelationships()
       } else {
         thread.rootId = thread.id
         thread.ownRecordsStarted = true
         this.revision++
+        this.resolvePendingRelationships()
       }
       return
     }
@@ -236,6 +256,31 @@ export class NativeCodexBridge {
     this.revision++
   }
 
+  private resolvePendingRelationships(): void {
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const thread of this.threads.values()) {
+        const pending = thread.pendingRelationship
+        if (!pending) continue
+        if (pending.parentId === pending.rootId) {
+          applyRelationship(thread, pending)
+          changed = true
+          continue
+        }
+        const parent = this.threads.get(pending.parentId)
+        if (!parent?.rootId) continue
+        if (parent.rootId !== pending.rootId) {
+          thread.pendingRelationship = undefined
+          changed = true
+          continue
+        }
+        applyRelationship(thread, pending)
+        changed = true
+      }
+    }
+  }
+
   private setBounded<T>(thread: NativeThread, category: string, map: Map<string, T>, key: string, value: T): void {
     const retainedKey = `${category}:${key}`
     if (!map.has(key) && thread.retainedRecords.size >= MAX_NATIVE_RECORDS_PER_THREAD) return
@@ -320,7 +365,7 @@ export class NativeCodexBridge {
           if (turn.completedAt) {
             push(event({
               eventId: `codex-native:${rootId}:turn:${turn.id}:returned`, type: 'agent_returned',
-              timestamp: turn.completedAt, workflowId, agentId: owner.id,
+              timestamp: turn.completedAt, workflowId, agentId: owner.id, sessionId: owner.id,
             }))
             returned = true
           }
@@ -329,11 +374,11 @@ export class NativeCodexBridge {
         for (const [callId, wait] of owner.waits) {
           push(event({
             eventId: `codex-native:${rootId}:wait:${callId}:waiting`, type: 'agent_waiting',
-            timestamp: wait.startedAt, workflowId, agentId: owner.id,
+            timestamp: wait.startedAt, workflowId, agentId: owner.id, sessionId: owner.id,
           }))
           if (wait.resumedAt) push(event({
             eventId: `codex-native:${rootId}:wait:${callId}:resumed`, type: 'agent_resumed',
-            timestamp: wait.resumedAt, workflowId, agentId: owner.id,
+            timestamp: wait.resumedAt, workflowId, agentId: owner.id, sessionId: owner.id,
           }))
         }
 

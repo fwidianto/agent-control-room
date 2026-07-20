@@ -157,6 +157,7 @@ interface CustomToolCallOutputPayload {
 }
 
 interface WebSearchCallPayload {
+  call_id?: string
   status?: string
   action?: { type?: string; query?: string }
 }
@@ -249,6 +250,17 @@ function extractOutputString(raw: FunctionCallOutputPayload['output']): string {
   }
   if (isRecord(raw) && typeof raw.output === 'string') return raw.output
   return ''
+}
+
+function extractExitStatus(raw: FunctionCallOutputPayload['output']): number | undefined {
+  let value: unknown = raw
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value) } catch { return undefined }
+  }
+  const envelope = isRecord(value) ? value : undefined
+  const metadata = envelope && isRecord(envelope.metadata) ? envelope.metadata : undefined
+  const status = metadata?.exit_code ?? metadata?.exitCode ?? envelope?.exit_code ?? envelope?.exitCode
+  return typeof status === 'number' && Number.isInteger(status) ? status : undefined
 }
 
 /** Pull the first "*** Update File: /path" line out of an apply_patch body. */
@@ -410,6 +422,7 @@ export class CodexRolloutParser {
       payload: {
         agent: ORCHESTRATOR_NAME,
         tool: name,
+        callId,
         args: argsSummary,
         preview: `${name}: ${argsSummary}`.slice(0, PREVIEW_MAX),
         inputData: extractInputData(name, args ?? {}),
@@ -425,6 +438,7 @@ export class CodexRolloutParser {
     state.pendingToolCalls.delete(callId)
 
     const output = extractOutputString(payload.output)
+    const exitCode = extractExitStatus(payload.output)
     const resultSummary = summarizeResult(output).slice(0, RESULT_MAX)
     const tokenCost = estimateTokenCost(pending.name, output)
     state.contextBreakdown.toolResults += tokenCost
@@ -438,9 +452,11 @@ export class CodexRolloutParser {
       payload: {
         agent: ORCHESTRATOR_NAME,
         tool: pending.name,
+        callId,
         result: resultSummary,
         tokenCost,
         ...(isError ? { isError: true, errorMessage: resultSummary } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
         ...(discovery ? { discovery } : {}),
       },
     })
@@ -467,6 +483,7 @@ export class CodexRolloutParser {
       payload: {
         agent: ORCHESTRATOR_NAME,
         tool: name,
+        callId,
         args: argsSummary,
         preview: `${name}: ${argsSummary}`.slice(0, PREVIEW_MAX),
         inputData: extractInputData(name, { patch: rawInput }),
@@ -489,6 +506,7 @@ export class CodexRolloutParser {
       payload: {
         agent: ORCHESTRATOR_NAME,
         tool: 'WebSearch',
+        ...(payload.call_id ? { callId: payload.call_id } : {}),
         args: query,
         preview: `WebSearch: ${query}`.slice(0, PREVIEW_MAX),
         inputData: { query },
@@ -500,6 +518,7 @@ export class CodexRolloutParser {
       payload: {
         agent: ORCHESTRATOR_NAME,
         tool: 'WebSearch',
+        ...(payload.call_id ? { callId: payload.call_id } : {}),
         result: payload.status || 'completed',
         tokenCost: 0,
       },
@@ -508,6 +527,28 @@ export class CodexRolloutParser {
 
   // ─── event_msg ───────────────────────────────────────────────────────────
 
+  private handleObservedToolCompletion(payload: Record<string, unknown>, state: CodexRolloutState): void {
+    const callId = typeof payload.call_id === 'string' ? payload.call_id : undefined
+    const pending = callId ? state.pendingToolCalls.get(callId) : undefined
+    if (!pending || !callId) return
+    state.pendingToolCalls.delete(callId)
+    const failed = payload.success === false || (typeof payload.exit_code === 'number' && payload.exit_code !== 0)
+    const exitCode = typeof payload.exit_code === 'number' ? payload.exit_code : undefined
+    this.delegate.emit({
+      time: this.delegate.elapsed(),
+      type: 'tool_call_end',
+      payload: {
+        agent: ORCHESTRATOR_NAME,
+        tool: pending.name,
+        callId,
+        result: pending.name === 'apply_patch' ? 'Patch operation completed'
+          : payload.type === 'mcp_tool_call_end' ? 'Tool operation completed' : 'Command operation completed',
+        ...(failed ? { isError: true, errorMessage: 'Operation reported failure' } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      },
+    })
+  }
+
   private handleEventMsg(payload: unknown, state: CodexRolloutState): void {
     if (!isRecord(payload)) return
     switch (payload.type) {
@@ -515,9 +556,13 @@ export class CodexRolloutParser {
         return this.handleAgentReasoning(payload, state)
       case 'token_count':
         return this.handleTokenCount(payload, state)
+      case 'exec_command_end':
+      case 'patch_apply_end':
+      case 'mcp_tool_call_end':
+        return this.handleObservedToolCompletion(payload, state)
       // Other event_msg types are either mirrors of response_item content
-      // (agent_message, user_message, exec_command_end, patch_apply_end) or
-      // metadata we don't currently surface (task_started, task_complete,
+      // (agent_message, user_message) or metadata we don't currently surface
+      // (task_started, task_complete,
       // turn_aborted, context_compacted — the latter paired with the
       // top-level `compacted` record which we handle authoritatively).
     }
